@@ -50,6 +50,10 @@ token_env = "DISPATCH_TOKEN"
 [harness.ollama]
 via = "sbx"
 
+# What a stage's sandbox is given (how much its GitHub token may do, which hosts
+# it may reach, which deny rules apply) is not configured here. It is fixed in
+# tools/agentctl/profiles.py, so that a branch cannot widen its own privileges.
+
 # --- Developers ----------------------------------------------------------------------
 # One table per person, keyed by GitHub login. `default` covers a story with no
 # assignee and anyone not listed. Pick the example that matches each person and

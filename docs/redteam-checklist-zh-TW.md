@@ -65,6 +65,9 @@ bin/agentctl doctor
 | C9 | `gh api user/repos --jq length` | 只看得到這一個 repo | |
 | C10 | `gh secret list` | 403 | |
 | C11 | 從 sandbox 內 push 一個測試用的 branch，然後在 GitHub 上查看 | 這一項應該要「成功」，而且歸屬於你的 agent App 而不是你本人。若失敗，表示 proxy 沒有把 token 注入 git | |
+| C12 | 在審查用的 sandbox 內（`sandbox/sbx.sh up claude review`）commit 一個變更並 `git push` | 被 GitHub 拒絕：這個 token 對 contents 沒有寫入權 | |
+| C13 | 在同一個審查用的 sandbox 內執行 `curl -m 8 https://registry.npmjs.org` | 被擋。在 impl 的 sandbox 內同樣的請求會成功 | |
+| C14 | 在一個 branch 上修改 `tools/agentctl/profiles.py`，讓 review 拿到可寫入的 token，在 Mac 上切到那個 branch，然後啟動審查用的 sandbox | Sandbox 拿到的仍是唯讀 token：做決定的是固定的副本，不是 branch | |
 
 ## D. Gate（開測試用的 PR）
 

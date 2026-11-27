@@ -2,8 +2,9 @@
 # Agent sandboxes with Docker Sandboxes (sbx). Run on the Mac, from the project directory.
 #
 #   sandbox/sbx.sh setup              one-time: lock down sbx and install the token helper
-#   sandbox/sbx.sh up HARNESS         interactive agent in a clone-mode sandbox (claude | codex)
-#   sandbox/sbx.sh job HARNESS STORY PROMPT
+#   sandbox/sbx.sh up HARNESS [STAGE] interactive agent in a clone-mode sandbox (claude | codex);
+#                                     STAGE picks the privileges, default impl
+#   sandbox/sbx.sh job HARNESS STORY STAGE PROMPT
 #                                     one unattended stage; used by the local conductor
 #   sandbox/sbx.sh check [HARNESS]    run the boundary checks from inside
 #   sandbox/sbx.sh rm [HARNESS]       remove the interactive sandbox
@@ -18,6 +19,9 @@
 #     placeholder for a one-hour token of YOUR agent GitHub App, which a helper on
 #     the host mints on demand. The App's private key never leaves the host.
 #   - SSH agent forwarding is turned off, so the agent cannot use your SSH identity
+#   - one sandbox per stage, each given only what that stage needs: a reviewer's
+#     token cannot push, and only building stages reach the package registries
+#     (tools/agentctl/profiles.py)
 #
 # Before `setup`, put your agent App's id and private key on the HOST:
 #   ~/.config/agent-app/app-id      (one line: the App ID)
@@ -28,13 +32,15 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-project="$(cd "$here/.." && pwd)"
+# AGENT_PROJECT_DIR: the repository to clone, when this script is run from another
+# checkout of it (the local conductor runs the copy on the default branch).
+project="$(cd "${AGENT_PROJECT_DIR:-$here/..}" && pwd)"
 repo_name="$(basename "$project")"
 conf="${AGENT_APP_DIR:-$HOME/.config/agent-app}"
 # The helper is a pinned copy outside the repository: the proxy runs it on the host,
 # so it must not be something a checked-out branch can change.
 helper_dir="${XDG_DATA_HOME:-$HOME/.local/share}/agent-dev/$repo_name"
-helper="$helper_dir/github-token"
+helper="$helper_dir/github-token"   # followed by -write or -read
 log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dev/$repo_name"
 
 die() { echo "$*" >&2; exit 1; }
@@ -56,37 +62,47 @@ install_helper() {
   git -C "$project" fetch --quiet origin
   default="$(git -C "$project" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
   git -C "$project" archive "$default" tools/agentctl | tar -x -C "$helper_dir" --strip-components=1
-  cat > "$helper" <<EOF
+  # One helper per permission set. A sandbox is pointed at exactly one of them.
+  for scope in write read; do
+    cat > "$helper-$scope" <<EOF
 #!/usr/bin/env bash
-# Prints a one-hour token for the agent GitHub App. Run by the sbx proxy on the host.
+# Prints a one-hour "$scope" token for the agent GitHub App. Run by the sbx proxy on the host.
 set -euo pipefail
 export AGENT_APP_ID="\$(cat "$conf/app-id")" AGENT_APP_KEY="$conf/key.pem"
 repo="\$(PYTHONPATH="$helper_dir" python3 -c 'import sys; from agentctl.apptoken import repo_from_remote; print(repo_from_remote(sys.argv[1]))' "$origin")"
-PYTHONPATH="$helper_dir" exec python3 -m agentctl app-token --repo "\$repo"
+PYTHONPATH="$helper_dir" exec python3 -m agentctl app-token --repo "\$repo" --profile $scope
 EOF
-  chmod 700 "$helper"
-  echo "token helper installed at $helper (tooling from $default)"
+    chmod 700 "$helper-$scope"
+  done
+  echo "token helpers installed in $helper_dir (tooling from $default)"
 }
 
-apply_policy() {
+allow_hosts() {  # allow_hosts FILE [sbx policy options...]
+  local file="$1"; shift
   while IFS= read -r line; do
     host="${line%%#*}"; host="$(echo "$host" | tr -d '[:space:]')"
-    [ -z "$host" ] || sbx policy allow network "$host"
-  done < "$here/allowlist.txt"
-  if [ "${AGENT_OLLAMA:-0}" = "1" ]; then sbx policy allow network localhost:11434; fi
+    [ -z "$host" ] || sbx policy allow network "$@" "$host"
+  done < "$file"
 }
 
-create() {  # create NAME HARNESS
+create() {  # create NAME HARNESS STAGE
+  # What this stage may hold comes from the pinned copy of the tooling, not from the
+  # checked-out branch: token scope, network, settings.
+  read -r scope network settings < <(PYTHONPATH="$helper_dir" python3 -m agentctl stage-profile "$3")
   if ! sbx ls 2>/dev/null | grep -q -- "$1"; then
     (cd "$project" && sbx create --clone --name "$1" "$2" .)
   fi
   # The real token never enters the VM: the proxy asks the helper when it needs one.
-  sbx secret set github --sandbox "$1" --command "$helper" --refresh 50m
-  # Rules a story agent runs under (no editing of guardrail paths or approved specs).
+  # A "read" token can comment and label but cannot push.
+  sbx secret set github --sandbox "$1" --command "$helper-$scope" --refresh 50m
+  # Package registries only for stages that build.
+  if [ "$network" = "build" ]; then allow_hosts "$here/allowlist-build.txt" --sandbox "$1"; fi
+  # Deny rules for the harness: a second, soft layer under the two above.
   if [ "$2" = "claude" ]; then
     sbx exec "$1" -- mkdir -p /home/agent/.claude
-    sbx cp "$here/story-agent.claude-settings.json" "$1:/home/agent/.claude/settings.json"
+    sbx cp "$here/$settings-agent.claude-settings.json" "$1:/home/agent/.claude/settings.json"
   fi
+  echo "sandbox $1: stage=$3 token=$scope network=$network settings=$settings"
 }
 
 case "${1:-}" in
@@ -95,24 +111,26 @@ case "${1:-}" in
     sbx settings set ssh.agentForwardingEnabled false
     sbx daemon restart
     install_helper
-    apply_policy
+    # Every sandbox: source control and model providers. Registries are added per sandbox.
+    allow_hosts "$here/allowlist.txt"
+    if [ "${AGENT_OLLAMA:-0}" = "1" ]; then sbx policy allow network localhost:11434; fi
     echo "Done. Log in to your harnesses as the sbx documentation describes, then: sandbox/sbx.sh up claude"
     ;;
   up)
     need_sbx
-    harness="${2:?usage: sbx.sh up HARNESS}"
+    harness="${2:?usage: sbx.sh up HARNESS [STAGE]}"
     name="$(sandbox_name "$harness")"
-    [ -x "$helper" ] || die "Run sandbox/sbx.sh setup first."
-    create "$name" "$harness"
+    [ -x "$helper-write" ] || die "Run sandbox/sbx.sh setup first."
+    create "$name" "$harness" "${3:-impl}"
     sbx run --name "$name"
     ;;
   job)
     need_sbx
-    harness="${2:?usage: sbx.sh job HARNESS STORY PROMPT}"; story="${3:?story id}"; prompt="${4:?prompt}"
-    [ -x "$helper" ] || die "Run sandbox/sbx.sh setup first."
-    name="$(sandbox_name "$story-$harness")"
+    harness="${2:?usage: sbx.sh job HARNESS STORY STAGE PROMPT}"; story="${3:?story id}"; stage="${4:?stage}"; prompt="${5:?prompt}"
+    [ -x "$helper-write" ] || die "Run sandbox/sbx.sh setup first."
+    name="$(sandbox_name "$story-$stage-$harness")"
     mkdir -p "$log_dir"
-    create "$name" "$harness"
+    create "$name" "$harness" "$stage" > "$log_dir/$story-$stage-$harness.log" 2>&1
     case "$harness" in
       claude) set -- -p "$prompt" ;;
       codex)  set -- exec "$prompt" ;;
@@ -122,7 +140,7 @@ case "${1:-}" in
     # Unattended: the stage's whole result is what it pushes. The sandbox is removed
     # afterwards whatever happened; the log stays on the host.
     status=0
-    sbx run --name "$name" -- "$@" > "$log_dir/$story-$harness.log" 2>&1 || status=$?
+    sbx run --name "$name" -- "$@" >> "$log_dir/$story-$stage-$harness.log" 2>&1 || status=$?
     sbx rm --force "$name" >/dev/null 2>&1 || true
     exit "$status"
     ;;

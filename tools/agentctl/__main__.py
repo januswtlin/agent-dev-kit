@@ -12,7 +12,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import apptoken, budget, docs, doctor, lease, redgreen, risk, specs, trace
+from . import apptoken, budget, docs, doctor, lease, profiles, redgreen, risk, specs, trace
 
 
 def _root() -> Path:
@@ -193,8 +193,9 @@ def cmd_conductor(args) -> int:
         return 0
 
     os.environ.update(lease.load_env_file(repo / ".env.conductor"))
-    # Local sandboxes are started from the working copy's own sandbox/ scripts.
-    os.environ["AGENTCTL_PROJECT_DIR"] = str(repo)
+    # Local sandboxes clone this repository, but are set up by the scripts on the
+    # default branch, never by whatever branch happens to be checked out here.
+    os.environ["AGENT_PROJECT_DIR"] = str(repo)
     github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "local")
     print(f"conductor is running here, every {args.interval}s. Ctrl-C hands over to GitHub Actions.")
     try:
@@ -203,7 +204,9 @@ def cmd_conductor(args) -> int:
                 print("another conductor took over; stopping")
                 return 0
             try:
-                _reconcile_once(lease.fresh_main_checkout(repo), args.dry_run)
+                trusted = lease.fresh_main_checkout(repo)
+                os.environ["AGENTCTL_TRUSTED_SCRIPTS"] = str(trusted)
+                _reconcile_once(trusted, args.dry_run)
             except (subprocess.CalledProcessError, OSError, SystemExit) as exc:
                 print(f"pass failed: {exc}")  # keep going; the next pass starts from scratch
             github.gh("variable", "set", "CONDUCTOR_LEASE", "--body", str(int(time.time())), check=False)
@@ -229,11 +232,19 @@ def cmd_app_token(args) -> int:
     if not repo:
         print("cannot tell which repository this is; pass --repo owner/name", file=sys.stderr)
         return 1
-    token = apptoken.installation_token(app_id, key, repo)
+    token = apptoken.installation_token(app_id, key, repo, profile=args.profile,
+                                        permissions=profiles.TOKEN_PERMISSIONS[args.profile])
     if args.git_credential:
         print(f"username=x-access-token\npassword={token}")
     else:
         print(token)
+    return 0
+
+
+def cmd_stage_profile(args) -> int:
+    """Print what a stage's sandbox is given: token scope, network, settings."""
+    profile = profiles.for_stage(args.stage)
+    print(profile["token"], profile["network"], profile["settings"])
     return 0
 
 
@@ -372,7 +383,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--key", help="path to the App's private key")
     p.add_argument("--repo", help="owner/name (defaults to the origin remote)")
     p.add_argument("--git-credential", action="store_true", help="output in git credential-helper format")
+    p.add_argument("--profile", choices=sorted(profiles.TOKEN_PERMISSIONS), default="write",
+                   help="permission set: write (push) or read (cannot push)")
     p.set_defaults(func=cmd_app_token)
+
+    p = sub.add_parser("stage-profile", help="print the token scope, network and settings a stage's sandbox gets")
+    p.add_argument("stage")
+    p.set_defaults(func=cmd_stage_profile)
 
     p = sub.add_parser("budget", help="estimate this month's Actions spend; move heavy CI to self-hosted near the allowance")
     p.add_argument("--dry-run", action="store_true")

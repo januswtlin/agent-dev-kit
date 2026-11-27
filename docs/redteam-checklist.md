@@ -65,6 +65,9 @@ bin/agentctl doctor
 | C9 | `gh api user/repos --jq length` | Only this one repo is visible | |
 | C10 | `gh secret list` | 403 | |
 | C11 | Push a test branch from inside the sandbox, then look at it on GitHub | This one should SUCCEED, and the push must be attributed to your agent App, not to you. If it fails, the proxy is not injecting the token into git | |
+| C12 | In a review sandbox (`sandbox/sbx.sh up claude review`), commit a change and `git push` | Refused by GitHub: the token has no write access to contents | |
+| C13 | In the same review sandbox, `curl -m 8 https://registry.npmjs.org` | Blocked. In an impl sandbox the same request succeeds | |
+| C14 | On a branch, change `tools/agentctl/profiles.py` so that review gets a write token, check that branch out on the Mac, and start a review sandbox | The sandbox still gets the read token: the pinned copy decides, not the branch | |
 
 ## D. Gates (open test PRs)
 

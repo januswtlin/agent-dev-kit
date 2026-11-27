@@ -134,7 +134,7 @@ sandbox/sbx.sh setup
 
 依 sbx 文件對各 harness 的說明登入。撰寫本文時，Codex 是在 host 上執行 `sbx secret set openai --oauth`，Claude Code 是在 sandbox 內執行 `/login`（**待驗證**）。
 
-啟動一個互動式的 agent，然後在第二個 terminal 檢查邊界：
+啟動一個互動式的 agent，然後在第二個 terminal 檢查邊界。可以加第二個參數指定 stage，sandbox 就拿到該 stage 的權限，例如 `sandbox/sbx.sh up claude review` 會拿到不能 push 的 token；預設是 `impl`。拉下工具的更新之後，要再執行一次 `sandbox/sbx.sh setup` 來更新固定的副本：
 
 ```bash
 sandbox/sbx.sh up claude

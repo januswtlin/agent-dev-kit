@@ -36,7 +36,8 @@ case "${1:-}" in
       limactl start --name "$name" --tty=false "$here/agent-vm.yaml" \
         --set ".mounts[0].location=\"$project\""
     fi
-    limactl shell "$name" sudo /workspace/sandbox/egress.sh /workspace/sandbox/allowlist.txt
+    # One long-lived VM serves every stage here, so it gets the widest list.
+    limactl shell "$name" sudo sh -c 'cat /workspace/sandbox/allowlist.txt /workspace/sandbox/allowlist-build.txt > /tmp/allowlist-all.txt && /workspace/sandbox/egress.sh /tmp/allowlist-all.txt'
     echo "VM '$name' is up. Next: sandbox/vm.sh check"
     ;;
   shell)

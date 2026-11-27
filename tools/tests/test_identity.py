@@ -124,3 +124,45 @@ class SandboxCheckTests(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(saved)
+
+
+class StageProfileTests(unittest.TestCase):
+    def test_only_stages_that_deliver_code_or_specs_can_push(self):
+        from agentctl import profiles
+        can_push = {s for s in profiles.STAGE_PROFILES if profiles.for_stage(s)["token"] == "write"}
+        self.assertEqual(can_push, {"design", "tests", "impl", "fix", "resolve-conflict", "fix-main", "product-owner", "planner"})
+        for stage in ("review", "triage"):
+            self.assertEqual(profiles.for_stage(stage)["token"], "read")
+        self.assertEqual(profiles.TOKEN_PERMISSIONS["read"]["contents"], "read")
+
+    def test_only_building_stages_reach_package_registries(self):
+        from agentctl import profiles
+        build = {s for s in profiles.STAGE_PROFILES if profiles.for_stage(s)["network"] == "build"}
+        self.assertEqual(build, {"design", "tests", "impl", "fix", "resolve-conflict", "fix-main"})
+
+    def test_spec_writers_get_spec_settings_and_everyone_else_story_settings(self):
+        from agentctl import profiles
+        self.assertEqual({s for s in profiles.STAGE_PROFILES if profiles.for_stage(s)["settings"] == "spec"},
+                         {"product-owner", "planner"})
+        story = json.loads((ROOT / "sandbox/story-agent.claude-settings.json").read_text())["permissions"]["deny"]
+        spec = json.loads((ROOT / "sandbox/spec-agent.claude-settings.json").read_text())["permissions"]["deny"]
+        self.assertIn("Edit(docs/specs/**)", story)
+        self.assertNotIn("Edit(docs/specs/**)", spec)
+        self.assertIn("Edit(policy/**)", spec)  # guardrails stay off limits for both
+
+    def test_an_unknown_stage_gets_the_least(self):
+        from agentctl import profiles
+        self.assertEqual(profiles.for_stage("something-new"), {"token": "read", "network": "base", "settings": "story"})
+
+    def test_token_request_is_limited_to_one_repository_and_the_profile(self):
+        from agentctl import profiles
+        body = apptoken.request_body("acme/app", profiles.TOKEN_PERMISSIONS["read"])
+        self.assertEqual(body, {"repositories": ["app"], "permissions": {"contents": "read", "pull_requests": "write", "issues": "write"}})
+        self.assertNotEqual(apptoken.cache_path("read"), apptoken.cache_path("write"))
+
+    def test_registries_are_not_in_the_base_allowlist(self):
+        base = (ROOT / "sandbox/allowlist.txt").read_text()
+        build = (ROOT / "sandbox/allowlist-build.txt").read_text()
+        self.assertNotIn("registry.npmjs.org", base)
+        self.assertIn("registry.npmjs.org", build)
+        self.assertIn("github.com", base)

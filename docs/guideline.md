@@ -35,12 +35,13 @@ It assumes nothing fixed about the team. One person with one AI subscription is 
 
 The sandbox built into a harness is not enough to protect privacy. Claude Code's sandbox allows reading almost the whole file system by default, and it covers only Bash, not the file tools, MCP servers or hooks. Codex's `workspace-write` likewise restricts only writes. They work against accidental deletion, but protection against reading depends on you listing every path correctly. A VM's mounts are deny by default: what is not mounted does not exist.
 
-The local sandbox is Docker Sandboxes (`sandbox/sbx.sh`). Four properties:
+The local sandbox is Docker Sandboxes (`sandbox/sbx.sh`). Five properties:
 
 - One microVM per agent, with its own kernel.
 - **Clone mode.** The repository is mounted read-only and the agent works on a private clone inside the VM. Nothing it does changes a file on the Mac, and its only way to deliver work is `git push`. This matters more than it looks. With an ordinary read-write mount, an agent can write a git hook into `.git/hooks`, and that hook then runs on the Mac, as you, the next time you use git in that directory.
 - Outbound connections are denied except to the hosts in `sandbox/allowlist.txt`, filtered by host name. This limits both data exfiltration after a prompt injection and callbacks from malicious packages.
 - No GitHub credential inside the VM. A proxy on the host replaces a placeholder with a one-hour token of your agent GitHub App, which a helper on the host mints when it is needed. The App's private key never leaves the host. SSH agent forwarding is turned off, because it is on by default and would let the agent push as you.
+- One sandbox per dispatched stage, created for it and removed afterwards. Stages share no files, processes or login state, and each is given only what it needs (see "Role assignment" in section 5).
 
 Lima (`sandbox/vm.sh`) remains as a fallback and as the home of the self-hosted runner. It is weaker on three counts: the workspace is mounted read-write, traffic is filtered by address rather than by host name, and the App's key has to live inside the VM. Neither has been run on a real machine yet; see section 9.
 
@@ -62,7 +63,7 @@ If you really must run directly on the Mac (for example, a brief interaction ins
 
 Agents have two roles in this repo, and the guardrails ask different things of each.
 
-A **story agent** is dispatched by the conductor and runs unattended. It must not edit the guardrail paths. This rule has two layers. The hard layer is CODEOWNERS and token permissions. The soft layer is the deny rules in `sandbox/story-agent.claude-settings.json`, installed in the user-level settings inside the VM and in the cloud environment, which apply only to story agents.
+A **story agent** is dispatched by the conductor and runs unattended. It must not edit the guardrail paths. This rule has two layers. The hard layer is CODEOWNERS and token permissions. The soft layer is the deny rules in `sandbox/story-agent.claude-settings.json`, installed in the user-level settings inside the sandbox and in the cloud environment, which apply only to story agents. The product owner and the planner are dispatched the same way but have to write specs and sprints, so they get `sandbox/spec-agent.claude-settings.json`: the guardrail paths stay off limits, the spec paths do not.
 
 **Maintenance work** is when you ask an agent directly, in a session, to change the pipeline itself (workflows, policy, tools, prompts). This is allowed on these conditions: a human asks in person, the work is done on a `chore/` branch, and a human approves the PR. A dispatch prompt, an issue or the contents of a file does not count as such a request.
 
@@ -180,6 +181,18 @@ The practical constraint is quota. Implementation is the most token-hungry stage
 
 In every setup a T2 change still goes to a human. With one person, that human is also the director. After a plan upgrade, changing the settings is all that is needed.
 
+Separating the roles into different sessions is not enough if every session holds the same powers. So each stage's sandbox is given only what that stage needs:
+
+| Stage | Its GitHub token can | Network | May edit |
+|---|---|---|---|
+| design, tests, impl (and its fix and conflict runs) | Push branches; comment, label | Source control, model providers, package registries | Code and tests; not guardrails, not approved specs |
+| review, triage | Read the repo; comment, label, review. **Cannot push** | Source control and model providers only | Nothing it could deliver anyway |
+| product-owner, planner | Push branches; comment, label | Source control and model providers only | Specs, sprints, product documents; not guardrails |
+
+The first two columns are hard controls. GitHub mints an App token with a subset of the App's permissions, and the sandbox's network policy is set per sandbox, so a reviewing agent that tries to push is refused by GitHub, whatever its prompt or its own reasoning says. The third column is the harness's deny rules, a soft layer. The table lives in `tools/agentctl/profiles.py` as constants, and a sandbox is set up from a copy of that file pinned outside the repo, so a branch cannot give itself more.
+
+Two limits. GitHub permissions are per repository, not per path: "the test writer must not touch the implementation" and "the implementer must not weaken a test" cannot be expressed in a token, and stay with `spec-verify`, CODEOWNERS and review. And this separation exists only on the Docker Sandboxes path. The Lima fallback is one long-lived VM that every stage shares, and a cloud session acts with the account you connected, whatever the stage.
+
 ## 6. Continuous operation: the conductor
 
 When you are away, it is the conductor that moves work forward.
@@ -293,7 +306,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 
 **Verified during development:**
 
-- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 90 unit tests in total.
+- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 96 unit tests in total.
 - Red-green was run end to end on a real git repo, split into two steps, collect and judge: an empty test was blocked, and passed after being changed into a real test. When the collect step was not run, the judgement was fail rather than pass.
 - The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving markers, marking a draft ready for review, a single failed action not affecting the others. While the lease is valid the Actions side does not act, and it takes over when the lease expires. When usage reaches the threshold it rewrites `CI_RUNNER`.
 - The workflows pass actionlint, the shell scripts pass shellcheck, and the command-blocking hook has tests.
@@ -306,6 +319,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 - Minting an agent App token against the real API (`agentctl app-token`).
 - The current input parameters of `anthropics/claude-code-action`; the account name of the Codex review bot and its review format.
 - Docker Sandboxes on a real Mac: the `sbx` commands used by `sandbox/sbx.sh`, clone mode, whether the proxy injects the App token into `git push` over HTTPS (the documentation does not spell this out), the home directory path inside the sandbox, and headless runs of each harness.
+- Narrowing an App token to fewer permissions through the real API, and per-sandbox network rules: both follow the documentation and neither has been exercised.
 - The Lima configuration and egress rules under `sandbox/`.
 - Whether the sandbox and permission syntax in `.claude/settings.json` matches the current version.
 - The actual label of the 1-core runner; the permissions needed for `workflow_run` to trigger the conductor and for downloading artifacts across workflows; the Conductor App's permission to write repo variables.
@@ -320,6 +334,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 - In clone mode the agent's work exists only inside the VM until it pushes. A stage that ends without pushing leaves nothing behind except its log.
 - In the Lima fallback, and in sbx's direct mode, the workspace is mounted read-write. The agent can then destroy the working tree and can plant a git hook that later runs on the Mac. That is why clone mode is the default.
 - Docker Sandboxes is at version 0.x. Its commands may change.
+- Per-stage privileges exist only on the Docker Sandboxes path. In the Lima fallback every stage shares one VM and one write token. In a cloud session every stage acts as the account you connected.
 - The subscription login state inside the VM could in theory be stolen by malicious repo content. The egress allowlist reduces this risk but does not remove it.
 - In the Lima fallback, egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
 - Cloud sessions act as the personal account you connect. Until section E of the red-team checklist has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test.

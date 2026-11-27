@@ -1,4 +1,5 @@
-# Hosts an agent sandbox may reach. Everything else is denied.
+# Hosts every agent sandbox may reach. Everything else is denied.
+# Package registries are in allowlist-build.txt and go to building stages only.
 # One host per line. Keep this list short: every entry is a place data can be sent.
 
 # Source control
@@ -14,14 +15,5 @@ claude.ai
 api.openai.com
 chatgpt.com
 auth.openai.com
-
-# Package registries. Remove the ones the project does not use.
-registry.npmjs.org
-pypi.org
-files.pythonhosted.org
-proxy.golang.org
-sum.golang.org
-crates.io
-static.crates.io
 
 # Ollama on the host is reached through the VM's host gateway, not through this list.

@@ -48,6 +48,8 @@
 | 26 | Agent 在掛載的 repo 裡埋 git hook 或改 `.git/config`，等你下次在那裡使用 git 時在 Mac 上執行 | Clone 模式：repo 以唯讀掛載，agent 在自己的 clone 上工作 | Workspace 可寫時 `agentctl doctor --inside` 會警告 |
 | 27 | Agent 利用被轉發的 SSH agent 以你的身分 push，繞過它自己的身分 | `sandbox/sbx.sh setup` 關掉 SSH agent forwarding；對外的 SSH 不在 allowlist 內 | 連得到帶有 key 的 SSH agent 時 `agentctl doctor --inside` 會判定失敗 |
 | 28 | Agent 的 GitHub 憑證從 sandbox 內被竊取 | 使用 sbx 時 key 與 token 都不在 VM 內；host 上的 proxy 注入一小時的 token | Lima 備援中 key 在 VM 內；可在 App 的設定頁撤銷 |
+| 29 | Agent 做了角色以外的事：審查或 triage 的 agent 修改程式，或拉進套件 | 它的 token 產生時就沒有 push 權限，它的 sandbox 也連不到套件 registry（`tools/agentctl/profiles.py`）。僅限 Docker Sandboxes 路徑 | Stage 的 prompt；harness 的 deny rules |
+| 30 | Agent 在自己的 branch 上修改權限設定或 sandbox 腳本，替自己加權限 | Sandbox 由固定在 repo 之外的工具副本與 default branch 上的腳本建立 | 這些路徑屬於 guardrail：CODEOWNERS 與 T2 |
 
 ## 參考事故
 

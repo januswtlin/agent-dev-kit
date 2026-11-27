@@ -273,8 +273,8 @@ def _send(action: Action, context: dict, roles: dict) -> None:
         # one; on GitHub Actions the stage waits until a conductor runs here again.
         if os.environ.get("GITHUB_ACTIONS"):
             raise Deferred(f"harness '{action.harness}' runs in a local sandbox; waiting for `agentctl conductor here`")
-        script = Path(os.environ.get("AGENTCTL_PROJECT_DIR") or ".") / "sandbox" / "sbx.sh"
-        subprocess.Popen([str(script), "job", action.harness, action.story or "sprint", prompt],
+        script = Path(os.environ.get("AGENTCTL_TRUSTED_SCRIPTS") or ".") / "sandbox" / "sbx.sh"
+        subprocess.Popen([str(script), "job", action.harness, action.story or "sprint", action.stage, prompt],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     elif via == "workflow":
         # GitHub-hosted (claude-code-action) or self-hosted runner in the sandbox VM.

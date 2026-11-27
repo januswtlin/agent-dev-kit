@@ -48,6 +48,8 @@ Each row is a class of incident that has really happened or can be expected, map
 | 26 | The agent plants a git hook or edits `.git/config` in a mounted repository, and it runs on the Mac the next time you use git there | Clone mode: the repository is mounted read-only and the agent works on a private clone | `agentctl doctor --inside` warns when the workspace is writable |
 | 27 | The agent uses your forwarded SSH agent to push as you, bypassing its own identity | `sandbox/sbx.sh setup` turns SSH agent forwarding off; outbound SSH is not on the allowlist | `agentctl doctor --inside` fails when an SSH agent with keys is reachable |
 | 28 | The agent's GitHub credential is stolen from inside the sandbox | With sbx neither the key nor the token is in the VM; the proxy on the host injects a one-hour token | In the Lima fallback the key is in the VM; revoke it in the App's settings |
+| 29 | An agent acts outside its role: a reviewer or triage agent changes code, or pulls in packages | Its token is minted without push permission and its sandbox cannot reach the package registries (`tools/agentctl/profiles.py`). Docker Sandboxes path only | The stage prompt; the harness deny rules |
+| 30 | An agent widens its own privileges by editing the profiles or the sandbox scripts on its branch | Sandboxes are set up by a copy of the tooling pinned outside the repo and by the scripts on the default branch | Those paths are guardrails: CODEOWNERS and T2 |
 
 ## Reference incidents
 

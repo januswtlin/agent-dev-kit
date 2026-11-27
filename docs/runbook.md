@@ -134,7 +134,7 @@ This turns off SSH agent forwarding for sbx (a setting that applies to all your 
 
 Log in to your harnesses the way the sbx documentation describes for each. At the time of writing that is `sbx secret set openai --oauth` on the host for Codex, and `/login` inside the sandbox for Claude Code (**To verify**).
 
-Start an interactive agent, then check the boundary from a second terminal:
+Start an interactive agent, then check the boundary from a second terminal. An optional second argument names the stage whose privileges the sandbox gets, for example `sandbox/sbx.sh up claude review` for a token that cannot push; the default is `impl`. After pulling changes to the tooling, run `sandbox/sbx.sh setup` again to refresh the pinned copy:
 
 ```bash
 sandbox/sbx.sh up claude

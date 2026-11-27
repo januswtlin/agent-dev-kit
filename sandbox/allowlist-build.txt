@@ -1,0 +1,12 @@
+# Extra hosts for stages that install dependencies and run tests (design, tests,
+# impl and its fix variants). Review, triage, product-owner and planner sandboxes
+# do not get these. See tools/agentctl/profiles.py.
+
+# Package registries. Remove the ones the project does not use.
+registry.npmjs.org
+pypi.org
+files.pythonhosted.org
+proxy.golang.org
+sum.golang.org
+crates.io
+static.crates.io

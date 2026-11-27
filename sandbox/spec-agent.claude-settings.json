@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(.github/**)",
+      "Edit(policy/**)",
+      "Edit(tools/**)",
+      "Edit(bin/**)",
+      "Edit(scripts/**)",
+      "Edit(sandbox/**)",
+      "Edit(prompts/**)",
+      "Edit(.claude/**)",
+      "Edit(codex/**)",
+      "Edit(AGENTS.md)",
+      "Edit(CLAUDE.md)",
+      "Edit(Makefile)"
+    ]
+  }
+}

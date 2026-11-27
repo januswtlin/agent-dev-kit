@@ -29,7 +29,20 @@ import urllib.request
 from pathlib import Path
 
 API = "https://api.github.com"
-CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentctl" / "app-token.json"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentctl"
+
+
+def cache_path(profile: str) -> Path:
+    """One cache file per permission profile, so a read token is never handed out as a write one."""
+    return CACHE_DIR / f"app-token-{profile}.json"
+
+
+def request_body(repo: str, permissions: dict[str, str] | None) -> dict:
+    """Ask for a token limited to this one repository and, when given, to fewer permissions."""
+    body: dict = {"repositories": [repo.split("/", 1)[1]]}
+    if permissions:
+        body["permissions"] = permissions
+    return body
 
 
 def _b64(data: bytes) -> str:
@@ -53,9 +66,9 @@ def repo_from_remote(url: str) -> str | None:
     return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
-def _call(method: str, url: str, bearer: str) -> dict:
-    request = urllib.request.Request(url, method=method, headers={
-        "Authorization": f"Bearer {bearer}", "Accept": "application/vnd.github+json",
+def _call(method: str, url: str, bearer: str, body: dict | None = None) -> dict:
+    request = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None, headers={
+        "Authorization": f"Bearer {bearer}", "Accept": "application/vnd.github+json", "Content-Type": "application/json",
         "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "agentctl"})
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
@@ -66,9 +79,15 @@ def _fresh(cached: dict, repo: str, app_id: str, now: float, margin: float = 300
             and float(cached.get("expires", 0)) - now > margin)
 
 
-def installation_token(app_id: str, key_path: str | Path, repo: str, now: float | None = None) -> str:
-    """Return a token for the App's installation on `repo`, reusing a cached one while it is valid."""
+def installation_token(app_id: str, key_path: str | Path, repo: str, now: float | None = None,
+                       profile: str = "write", permissions: dict[str, str] | None = None) -> str:
+    """Return a token for the App's installation on `repo`, reusing a cached one while it is valid.
+
+    `permissions` narrows the token below what the App itself holds; `profile`
+    names that set and keeps its cache apart from the others.
+    """
     now = now if now is not None else time.time()
+    CACHE = cache_path(profile)
     try:
         cached = json.loads(CACHE.read_text(encoding="utf-8"))
         if _fresh(cached, repo, app_id, now):
@@ -77,7 +96,8 @@ def installation_token(app_id: str, key_path: str | Path, repo: str, now: float 
         pass
     jwt = make_jwt(app_id, key_path, now)
     installation = _call("GET", f"{API}/repos/{repo}/installation", jwt)
-    granted = _call("POST", f"{API}/app/installations/{installation['id']}/access_tokens", jwt)
+    granted = _call("POST", f"{API}/app/installations/{installation['id']}/access_tokens", jwt,
+                    request_body(repo, permissions))
     expires = time.mktime(time.strptime(granted["expires_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.touch(mode=0o600, exist_ok=True)
