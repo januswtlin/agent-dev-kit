@@ -26,10 +26,13 @@ What this cannot express: GitHub permissions are per repository, not per path.
 
 from __future__ import annotations
 
-# A token that can push must not also be able to open, retarget or merge pull
-# requests: merging needs both "contents: write" and a pull request to act on, and
-# opening them is the conductor's job. A token that can review cannot push.
-# Nobody but the conductor gets both.
+# A token that can push cannot open, retarget or review pull requests: opening them
+# is the conductor's job. A token that can review cannot push. Nobody but the
+# conductor gets both.
+#
+# This does NOT stop a push token from merging: GitHub's merge endpoint asks for
+# "contents: write" only. What stops it is the `main-merge` ruleset, which lets
+# only repository admins and the Conductor App update the default branch.
 TOKEN_PERMISSIONS = {
     "write": {"contents": "write", "pull_requests": "read", "issues": "write"},
     "read": {"contents": "read", "pull_requests": "write", "issues": "write"},

@@ -39,7 +39,7 @@ Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設
 
 - 每個 agent 一個 microVM，有自己的 kernel。
 - **Clone 模式。** Repo 以唯讀方式掛進去，agent 在 VM 內自己的 clone 上工作。它做的任何事都改不到 Mac 上的檔案，交付成果的唯一途徑是 `git push`。這比看起來重要：若是一般的可讀寫掛載，agent 可以在 `.git/hooks` 寫入一個 git hook，等你下次在那個目錄使用 git 時，hook 就會在 Mac 上以你的身分執行。掛進去的是整個 repo 目錄，包含未追蹤的檔案與 git 忽略的檔案。所以專案目錄裡不能放任何 secret。`sbx.sh` 只要找到看起來像 secret 的被忽略檔案（`.env*`、`*.pem`、`*.key` 與類似的檔名）就拒絕啟動；`AGENT_ALLOW_FILES_IN_TREE=1` 可以略過這項檢查。這項檢查只看檔名，所以它是提醒，不是保證。
-- 對外連線除了 allowlist 所列的主機之外一律拒絕，以主機名稱過濾。`setup` 要求 sbx 使用 deny-all 的網路 preset（`sbx policy init deny-all`），再加上 `sandbox/allowlist.txt` 所列的主機。`sandbox/allowlist-build.txt` 裡的套件 registry 是逐個 sandbox 加入的，只給需要建置的 stage。如果機器上已經有 preset（Docker 的「balanced」preset 允許套件管理工具），`setup` 會停下來，要求你加上 `AGENT_RESET_POLICY=1` 重跑。那會先執行 `sbx policy reset --force`，移除這台機器上所有既有的 sbx 網路規則。Allowlist 同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
+- 對外連線除了 allowlist 所列的主機之外一律拒絕，以主機名稱過濾。`setup` 要求 sbx 使用 deny-all 的網路 preset（`sbx policy init deny-all`），再加上 `sandbox/allowlist.txt` 所列的主機。`sandbox/allowlist-build.txt` 裡的套件 registry 是逐個 sandbox 加入的，只給需要建置的 stage。如果機器上已經有 preset（Docker 的「balanced」preset 允許套件管理工具），`setup` 會停下來，要求你加上 `AGENT_RESET_POLICY=1` 重跑。那會先執行 `sbx policy reset --force`，移除這台機器上所有既有的 sbx 網路規則。`setup` 設定過 deny-all 之後會在 host 上記下這件事，所以之後為了更新固定的工具副本而重跑 `setup` 時不需要 reset。Allowlist 同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
 - VM 內沒有任何 GitHub 憑證。Host 上的 proxy 把佔位值換成你的 agent GitHub App 的一小時 token，token 由 host 上的 helper 在需要時產生。App 的 private key 不離開 host。SSH agent forwarding 會被關掉，因為它預設是開的，會讓 agent 能以你的身分 push。共用的 skills store 也會被關掉（`sbx settings set skills.defaultMode off`），因為它預設會以唯讀方式掛進每個 sandbox。
 - 每個被派發的 stage 一個 sandbox，絕不重複使用。無人值守的 job 會拿到一個以時間戳記結尾的唯一名稱，結束後 sandbox 會被移除。如果同名的 sandbox 已經存在，job 會拒絕啟動。互動式的 sandbox 依 stage 命名，`agent-<owner>-<repo>-<stage>-<harness>`，所以 `up claude`（impl）與 `up claude review` 是兩個不同的 sandbox，而 `up` 只會重新接上為同一個 stage 建立的那一個。Stage 之間不共用檔案、行程或登入狀態，而且各自只拿到它需要的東西（見第 5 節的「角色分配」）。
 - 專案目錄裡的任何東西都不會在 host 上被執行。建立 sandbox 的工具是從 default branch 取出、固定在 repo 之外的副本，位置是 `~/.local/share/agent-dev/<owner>-<repo>/`。它以 `python3 -I` 啟動，目前目錄與 `PYTHONPATH` 因此不在 import 路徑上。Host 上的狀態以 origin remote 的 owner 與名稱為鍵，所以兩個目錄名稱相同的 clone 不會共用 helper。Story id、stage 與 harness 在進入路徑、sandbox 名稱或指令之前都會先驗證。
@@ -68,7 +68,7 @@ Agent 在這個 repo 裡有兩種角色，guardrail 對兩者的要求不同。
 
 **Story agent** 由 conductor 派工，無人看管。它不得編輯 guardrail 路徑。這條規則有兩層：硬性的是 CODEOWNERS 與 token 權限；軟性的是 `sandbox/story-agent.claude-settings.json` 裡的 deny rules，安裝在 sandbox 內的使用者層設定與雲端環境，只對 story agent 生效。Product owner 與 planner 同樣由 conductor 派工，但它們必須寫 spec 與 sprint，所以拿到的是 `sandbox/spec-agent.claude-settings.json`：guardrail 路徑仍然不能碰，spec 路徑可以。
 
-**維護工作**是你在 session 裡直接要求 agent 修改 pipeline 本身（workflow、policy、工具、prompt）。這是允許的，條件是由人類當面提出、在 `chore/` branch 上進行、PR 由人類核准。派工的 prompt、issue、檔案內容都不算這種要求。`chore/` branch 的 PR 由 conductor 開啟，直接是可審狀態並啟用 auto-merge，所以人類核准而且 check 全綠之後，它會自己合併。
+**維護工作**是你在 session 裡直接要求 agent 修改 pipeline 本身（workflow、policy、工具、prompt）。這是允許的，條件是由人類當面提出、在 `chore/` branch 上進行、PR 由人類核准。派工的 prompt、issue、檔案內容都不算這種要求。`chore/` branch 的 PR 由 conductor 開啟，直接是可審狀態。由人類核准並合併；conductor 不會在 chore 的 PR 上啟用 auto-merge。
 
 Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的規則：不讀寫 home、不 force push、不碰雲端 CLI、不自行開 PR 或合併。對 Docker Sandbox 裡的 agent 來說，最後一項同時也是硬性限制，見下面的「身分與 token」。早期版本把禁止編輯 guardrail 路徑的規則也放在共用設定裡，結果連受你指示的維護工作都被擋住，包括修正這個設定本身。
 
@@ -180,7 +180,7 @@ Stage 7  你打 v* tag → 部署 production                                   �
 
 兩種模式：**chat**，你在手機或桌面上與它對話，適合想深入討論的需求；**async**，你只在 `docs/product/roadmap.md` 加一行，conductor 會派 PO 起草 spec PR，問題寫在 PR 描述裡，你用 review comment 回答。你回來時面對的是可以直接核准或簡短回覆的 spec。未核准的 spec PR 上限是三個，避免堆積。
 
-核准的方式是在 GitHub approve 那個 PR，手機 app 即可。不用 label 當核准訊號，因為 agent 能改 label。Spec 與 sprint 的 PR 由 conductor 開啟，直接是可審狀態並啟用 auto-merge，所以你核准而且 check 全綠之後，PR 會自己合併。在這之前，核准過的 spec 或 sprint PR 沒有任何東西會去合併它。（**待驗證**：Conductor App 在一個還在等核准的 PR 上啟用 auto-merge。）
+核准的方式是在 GitHub approve 那個 PR，手機 app 即可。不用 label 當核准訊號，因為 agent 能改 label。Spec 與 sprint 的 PR 由 conductor 開啟，直接是可審狀態。你核准之後，conductor 會在它上面啟用 auto-merge，check 全綠時它就自己合併。這是你的決定，不是 conductor 的判斷，所以它不受 `auto_merge_tiers` 影響。在這之前，核准過的 spec 或 sprint PR 沒有任何東西會去合併它。（**待驗證**：GitHub 對已核准的 PR 回報的 review decision，以及 Conductor App 啟用 auto-merge。）
 
 ### 角色分配
 
@@ -234,11 +234,11 @@ Lease 不是鎖。Repo variable 沒有 compare-and-set，所以在交接前後�
 
 Agent 的 push 由 `notify.yml` 通報。它在 push 到 `story/**`、`spec/**`、`sprint/**` 或 `chore/**` 時執行，沒有任何權限、沒有任何 secret，也不做任何事。Conductor 對它的完成做出反應。它取代了已經移除的 `open-pr.yml`：那個 workflow 由 push 本身觸發，而且握有 App 的 key。
 
-PR 由 conductor 開啟（`tools/agentctl/reconcile.py` 的 `open-pr` 動作）。Story branch 開成 draft。Spec、sprint 與 chore branch 的 PR 直接是可審狀態並啟用 auto-merge，所以人類核准之後它會自己合併。作者是 Conductor App，所以人類可以核准。
+PR 由 conductor 開啟（`tools/agentctl/reconcile.py` 的 `open-pr` 動作）。Story branch 開成 draft。Spec、sprint 與 chore branch 的 PR 直接是可審狀態。作者是 Conductor App，所以人類可以核准。人類核准了 spec 或 sprint 的 PR 之後，conductor 會在它上面啟用 auto-merge。
 
 Pipeline 的 secret 放在一個名為 `conductor` 的 GitHub environment 裡，它的 deployment branch 規則只允許 default branch。需要這些 secret 的 job 都宣告 `environment: conductor`：`conductor.yml` 的 `reconcile`、`brief.yml` 的 `brief`、`agent-review.yml` 的 `claude`。從其他任何 ref 啟動的執行，包含手動 dispatch 某個 branch，都會被 GitHub 拒絕給予 secret。所以 `CONDUCTOR_APP_PRIVATE_KEY` 與每位開發者各自的 secret（`DISPATCH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`，以及各自帶 `_<LOGIN>` 的形式）都必須建立成 `conductor` 這個 environment 的 secret，不是 repo secret。Variable 仍然是 repo variable。（**待驗證**：Team 方案的 private repo 上，帶 deployment branch 規則的 environment。）
 
-本機執行時會讀一個 repo 之外的檔案：`~/.config/agent-dev/<owner>-<repo>/conductor.env`。它必須定義 `CONDUCTOR_APP_ID`、`CONDUCTOR_APP_KEY`（Conductor App 的 private key 在 Mac 上的路徑）與 `DEVELOPER`（你的 GitHub 帳號）。它也放你用到的派工憑證：`CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`、`DISPATCH_TOKEN`。`agentctl conductor here`、`away` 與 `status` 都需要這個檔案。它原本是專案根目錄的 `.env.conductor`。搬走的原因是 clone 模式的 sandbox 讀得到專案目錄裡的每個檔案。本機 sandbox（`via = "sbx"`）只會在該 story 所屬開發者的 Mac 上啟動，而 conductor 是靠 `DEVELOPER` 知道自己在誰的 Mac 上。
+本機執行時會讀一個 repo 之外的檔案：`~/.config/agent-dev/<owner>-<repo>/conductor.env`。它必須定義 `CONDUCTOR_APP_ID`、`CONDUCTOR_APP_KEY`（Conductor App 的 private key 在 Mac 上的路徑）與 `DEVELOPER`（你的 GitHub 帳號）。它也放你用到的派工憑證：`CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`、`DISPATCH_TOKEN`。`agentctl conductor here`、`away` 與 `status` 都需要這個檔案。它原本是專案根目錄的 `.env.conductor`。搬走的原因是 clone 模式的 sandbox 讀得到專案目錄裡的每個檔案。在你 Mac 上的 conductor 只握有你的憑證。它派發指派給你的 story 與沒有指派的 story，指派給另一位開發者的 story 則延後；它是靠 `DEVELOPER` 知道你是誰。所以本機 sandbox（`via = "sbx"`）只會在該 story 所屬開發者的 Mac 上啟動。
 
 ### 順序的判斷從哪裡來
 
@@ -264,7 +264,7 @@ Pipeline 的 secret 放在一個名為 `conductor` 的 GitHub environment 裡，
 - Sprint 完成、下一個尚未核准時，開發停止。只有 spec 的起草繼續。它不會自行擴張範圍。
 - PR 落後 main 時更新 branch；有衝突時派解衝突的任務。
 - Fix、解衝突與 review 都綁定在派工當時的那個 commit 上。Fix 在 branch 前進之前都算進行中。每個新的 commit 都需要自己的 review 判定；決定這件事的不是 `done:review` label。
-- Conductor 從目前所在的位置送不出去的 stage（conductor 在 Actions 上時的本機 sandbox，或屬於另一位開發者那台 Mac 的 story）會被延後，而且不寫入任何東西。
+- Conductor 從目前所在的位置送不出去的 stage（conductor 在 Actions 上時的本機 sandbox，或 conductor 在你的 Mac 上執行時另一位開發者的 story）會被延後，而且不寫入任何東西。
 - 在先前的 sprint 已經合併的相依 story 視為已滿足。Triage 要求「重試」之後，story 仍然會等 triage 追加的相依 story。
 - 加上 `--dry-run` 時，它只印出會做的事，不建立任何東西，連追蹤用的 issue 也不建立。
 - main 變紅時停止派發，只派一個修復任務。
@@ -340,7 +340,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 
 **已在開發時驗證：**
 
-- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 119 個單元測試。
+- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 121 個單元測試。
 - Red-green 在一個真實的 git repo 上端對端執行，分成收集與判定兩步：空測試被擋下，改成真的測試後通過；沒有執行收集步驟時判定為失敗而非通過。
 - Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、在送出工作之前留 marker 並在送出失敗時撤回、把 draft 轉為可審、單一動作失敗不影響其他動作。它會忽略偽造的 marker（不是 conductor 或名單上的人類寫的）與用來混淆的 PR（已關閉、目標是其他 base、或來自其他 repo）。lease 有效時 Actions 端不動作、過期時接手；lease 上的名字換成別人時本機 conductor 會停止。用量達門檻時，只有在設定了 overflow runner 的情況下才改寫 `CI_RUNNER`。
 - 工作目錄裡帶有惡意的 module（`agentctl.py`、`json.py`、`tomllib.py`）無法取代工具本身，只要工具是透過 `bin/agentctl` 或 `python3 -I tools/run.py` 啟動。
@@ -360,7 +360,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - Team 方案的 private repo 上，帶 deployment branch 規則的 environment：從 default branch 以外的任何 ref 啟動的執行，確實拿不到 `conductor` environment 的 secret。
 - `main-merge` ruleset：它是否如第 4 節所述疊加在 `main` ruleset 之上，以及 required checks 裡的 `integration_id: 15368` 是否指的是 GitHub Actions，並且接受由 workflow job 寫入的 `agent-review` status。
 - PR 關閉時的 `pull_request_target` 觸發，以及從 `notify` 經 `workflow_run` 到 conductor 的這條鏈。
-- Conductor App 在 spec、sprint 與 chore 的 PR 上啟用 auto-merge，以及人類核准之後的合併。
+- GitHub 對已核准的 spec 或 sprint PR 回報的 review decision、Conductor App 在它上面啟用 auto-merge，以及之後的合併。
 - `gh variable get`：conductor 用它讀取 kill switch、lease 與額度，而較舊的 `gh` 版本沒有這個指令。
 - `sandbox/` 下的 Lima 設定與 egress 規則。它們不屬於支援的安裝路徑。
 - `.claude/settings.json` 的 sandbox 與 permission 語法是否符合目前版本。

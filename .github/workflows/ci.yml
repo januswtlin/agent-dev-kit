@@ -7,10 +7,12 @@ name: ci
 #   - the test suite runs once on head, plus once on base for a story branch, in ONE job
 #   - judging happens in a second, tiny job that executes no pull request code
 #
-# `ci` runs pull request code with a read-only token and no secrets. It may move
-# to the self-hosted runner in the sandbox VM when the monthly allowance runs low
-# (vars.CI_RUNNER, set by `agentctl budget`). `spec-verify` never moves: a machine
-# that ran the pull request's code must not be the one that judges it.
+# `ci` runs pull request code with a read-only token and no secrets. Its runner
+# comes from vars.CI_RUNNER, which `agentctl budget` changes only when an overflow
+# runner is configured in policy/conductor.toml; none is by default, because the
+# runner must be dedicated, hold no credentials and be recreated for every job.
+# `spec-verify` never moves: a machine that ran the pull request's code must not
+# be the one that judges it.
 
 on:
   pull_request:
