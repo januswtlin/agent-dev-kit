@@ -113,15 +113,19 @@ Setup 依序做以下的事：
 4. 把固定版本的工具與兩個 token helper 安裝在 repo 之外（見下文）。
 5. 對所有 sandbox 放行 `sandbox/allowlist.txt` 所列的主機：原始碼管理與模型供應商。套件 registry 不在這份清單裡。
 
-如果 sbx 已經有網路 preset，第 2 步會失敗，setup 會停止。Docker 的「balanced」preset 就是一例，它放行套件管理工具。sbx 無法就地更換 preset，所以 setup 會要求你改用這個方式重新執行：
+如果你第一次執行 setup 時 sbx 已經有網路 preset，第 2 步會失敗，setup 會停止。Docker 的「balanced」preset 就是一例，它放行套件管理工具。sbx 無法就地更換 preset，所以 setup 會要求你改用這個方式重新執行：
 
 ```bash
 AGENT_RESET_POLICY=1 sandbox/sbx.sh setup
 ```
 
-帶 `AGENT_RESET_POLICY=1` 時，setup 會先執行 `sbx policy reset --force`。**這會移除這台機器上所有既有的 sbx 網路規則**，包含你為與這個專案無關的 sandbox 設定的規則。然後它從 deny-all 重新開始。執行前先記下你還需要的規則。**待驗證**：在已經是 deny-all 的機器上再執行一次 `setup`，是否也會停在第 2 步。如果會，之後每次執行 `setup` 都需要 `AGENT_RESET_POLICY=1`，而當時存在的 sandbox 會失去它們自己的規則；請移除它們再重新啟動。
+帶 `AGENT_RESET_POLICY=1` 時，setup 會先執行 `sbx policy reset --force`。**這會移除這台機器上所有既有的 sbx 網路規則**，包含你為與這個專案無關的 sandbox 設定的規則。然後它從 deny-all 重新開始。執行前先記下你還需要的規則。
 
-固定版本的工具放在 `~/.local/share/agent-dev/OWNER-REPO/`（有設定 `$XDG_DATA_HOME` 時在它底下），其中 `OWNER-REPO` 取自 origin remote。不同 repo 的兩個 clone 不會共用它。裡面有一份 `tools/agentctl` 與 `tools/run.py`，內容取自 origin 上的 default branch，不是你的 working tree；另外有兩個 helper：`github-token-write` 與 `github-token-read`。Sandbox 需要 GitHub token 時，host 上的 sbx proxy 會執行其中一個。這個目錄裡的東西一律以 `python3 -I` 啟動，所以目前目錄中的檔案無法冒充它。拉下工具的更新之後，要再執行一次 `sandbox/sbx.sh setup` 來更新這份固定的副本。
+Setup 設好 deny-all 之後會留下一個標記（`~/.local/state/agent-dev/sbx-deny-all`），之後單純執行 `sandbox/sbx.sh setup` 時會跳過第 2 步。所以更新固定版本的工具不需要 reset。只有在你想清掉規則、重新開始時，才再用 `AGENT_RESET_POLICY=1`。
+
+這個標記只記錄 setup 曾經做過什麼。它無法知道 preset 之後是否被你或別的工具改過。所以 script 不依賴它。**每次建立 sandbox，以及每次重新接上 sandbox 時，script 都會從 sandbox 內部詢問它連得到什麼**：`https://example.com/` 對每個 sandbox 都必須被拒絕，`https://registry.npmjs.org/` 對每個不做建置的 stage 都必須被拒絕。只要其中一個連得到，script 就會停止並告訴你；常見的原因是 preset 不是 deny-all，或有一條比這個專案的清單更寬的整台機器規則，修正方式就是上面的 reset。這項探測使用 sandbox 內的 `curl`。如果 sandbox image 沒有 `curl`，script 無法檢查，就會拒絕執行；`AGENT_SKIP_NETWORK_PROBE=1` 可以不做檢查就繼續。**待驗證**：sandbox image 內含 `curl`，而且被 sbx proxy 拒絕的請求會以探測所預期的方式失敗（`curl -f` 以非零狀態結束）。
+
+固定版本的工具放在 `~/.local/share/agent-dev/OWNER-REPO/`（有設定 `$XDG_DATA_HOME` 時在它底下），其中 `OWNER-REPO` 取自 origin remote。不同 repo 的兩個 clone 不會共用它；這個目錄記錄了它屬於哪個 repo，如果另一個 repo 的名稱對應到同一個目錄，script 會停止。裡面有一份 `tools/agentctl` 與 `tools/run.py`，內容取自 origin 上的 default branch，不是你的 working tree；另外有兩個 helper：`github-token-write` 與 `github-token-read`。Sandbox 需要 GitHub token 時，host 上的 sbx proxy 會執行其中一個。這個目錄裡的東西一律以 `python3 -I` 啟動，所以目前目錄中的檔案無法冒充它。拉下工具的更新之後，要再執行一次 `sandbox/sbx.sh setup` 來更新這份固定的副本。
 
 若要讓 sandbox 能連到 Mac 上的 Ollama，setup 改用這個方式執行：
 
@@ -141,7 +145,7 @@ sandbox/sbx.sh up claude
 sandbox/sbx.sh check claude impl
 ```
 
-互動式的 sandbox 是每個 stage 一個。`up` 的第二個參數指定 stage，預設是 `impl`。Stage 決定 sandbox 拿到的 token、網路與 deny rules，依據是固定副本裡的 `profiles.py`。Sandbox 的名稱是 `agent-OWNER-REPO-STAGE-HARNESS`，所以 `up claude` 與 `up claude review` 是兩個不同的 sandbox。Review 的那一個拿到不能 push 的 token，也連不到套件 registry：
+互動式的 sandbox 是每個 stage 一個。`up` 的第二個參數指定 stage，預設是 `impl`。Stage 決定 sandbox 拿到的 token、網路與 deny rules，依據是固定副本裡的 `profiles.py`。Sandbox 的名稱是 `ag-TAG-STAGE-HARNESS`，所以 `up claude` 與 `up claude review` 是兩個不同的 sandbox。`TAG` 代表 repo：小寫的 `owner-repo` 的前八個字元、一個連字號，再加上 `owner/repo` 的雜湊值中的六個字元，例如 `ag-acme-wid-3f9c1a-impl-claude`。名稱這麼短，是因為 sbx 把 sandbox 名稱限制在 63 個字元以內；script 拒絕建立更長的名稱。`up` 會印出這個名稱。Review 的那一個拿到不能 push 的 token，也連不到套件 registry：
 
 ```bash
 sandbox/sbx.sh up claude review
@@ -157,18 +161,18 @@ sandbox/sbx.sh check claude review
 sandbox/sbx.sh rm claude review
 ```
 
-對同一個 harness 與 stage 再執行一次 `up`，會重新接上那個 sandbox。它會一直留著，直到你用 `rm` 移除。需要建置的 stage（design、tests、impl 與各個 fix stage）另外會拿到 `sandbox/allowlist-build.txt` 所列的主機，只對該 sandbox 生效。
+對同一個 harness 與 stage 再執行一次 `up`，會重新接上那個 sandbox，接上之前先做新 sandbox 也要經過的那兩項檢查：專案目錄內沒有檔名像機密的檔案，以及網路探測。它保有建立時拿到的 token 與規則，並一直留著，直到你用 `rm` 移除。需要建置的 stage（design、tests、impl 與各個 fix stage）另外會拿到 `sandbox/allowlist-build.txt` 所列的主機，只對該 sandbox 生效。
 
-無人看管的 job 不一樣。本機 conductor 以 `sandbox/sbx.sh job` 啟動每一個 job，使用的是它自己的 default branch checkout。每個 job 都拿到一個全新的 sandbox，名稱以時間戳結尾、不會重複；job 結束後不論結果如何，sandbox 都會被移除。如果同名的 sandbox 已經存在，job 會拒絕執行。Log 留在 Mac 上的 `~/.local/state/agent-dev/OWNER-REPO/`。本機 sandbox 只會在 story 所屬開發者的 Mac 上啟動，也就是 `conductor.env` 裡 `DEVELOPER` 那一行所指的人。
+無人看管的 job 不一樣。本機 conductor 以 `sandbox/sbx.sh job` 啟動每一個 job，使用的是它自己的 default branch checkout。每個 job 都拿到一個全新的 sandbox，名稱不會重複（`ag-TAG-STORY-STAGE-HARNESS-TIMESTAMP`）；job 結束後不論結果如何，sandbox 都會被移除。如果同名的 sandbox 已經存在，job 會拒絕執行。Log 留在 Mac 上的 `~/.local/state/agent-dev/OWNER-REPO/`。本機 sandbox 只會在 story 所屬開發者的 Mac 上啟動，也就是 `conductor.env` 裡 `DEVELOPER` 那一行所指的人。
 
-Agent 在自己的 clone 上工作，以 push 交付成果。想在它 push 之前看它的工作，可以從 sbx 加到你 repo 的 remote 取得。先列出 remote 找到它的名稱；預設的互動式 sandbox 應該是 `sandbox-agent-OWNER-REPO-impl-claude`（**待驗證**）：
+Agent 在自己的 clone 上工作，以 push 交付成果。想在它 push 之前看它的工作，可以從 sbx 加到你 repo 的 remote 取得。先列出 remote 找到它的名稱；它應該是 `sandbox-` 後面接著 `up` 印出的 sandbox 名稱（**待驗證**）：
 
 ```bash
 git remote
 ```
 
 ```bash
-git fetch sandbox-agent-OWNER-REPO-impl-claude
+git fetch REMOTE_NAME
 ```
 
 Fetch 是安全的。不要在你用來執行 host script 的那個 checkout 裡切到那個 branch。
