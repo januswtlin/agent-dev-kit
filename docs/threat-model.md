@@ -1,57 +1,64 @@
 # Threat model
 
-每一列是一類實際發生過或可預期的事故，對應到擋住它的控制。控制分兩種：**硬性**的由環境或 GitHub 強制，agent 無法繞過；**軟性**的可以被繞過，只當第二層。
+*繁體中文：[threat-model-zh-TW.md](threat-model-zh-TW.md). The English version governs if the two differ.*
 
-## 資產
+Each row is a class of incident that has really happened or can be expected, mapped to the controls that stop it. Controls are of two kinds. **Hard** controls are enforced by the environment or by GitHub, and the agent cannot get round them. **Soft** controls can be bypassed and serve only as a second layer.
 
-| 資產 | 最壞情況 | 可復原嗎 |
+## Assets
+
+| Asset | Worst case | Recoverable? |
 |---|---|---|
-| Mac 上的私人資料 | 被讀取並進入廠商的 context，或被送到外部 | 否 |
-| Mac 上工作目錄以外的檔案 | 被刪除或覆寫 | 靠備份 |
-| 暫時有效的雲端 CLI token | 在有效期間被用來操作雲端資源 | 視操作而定 |
-| Repo 的歷史與 main | 被改寫，或被合入有問題的程式 | 是（git），但代價高 |
-| 護欄本身（workflow、policy、spec） | 被削弱後，其他防線失效 | 是，前提是有人發現 |
-| 訂閱帳號的登入狀態 | 被竊取 | 可撤銷 |
-| 未來的 production 與資料庫 | 被刪除或外洩 | 否 |
+| Private data on the Mac | Read and taken into a vendor's context, or sent outside | No |
+| Files on the Mac outside the working directory | Deleted or overwritten | From backup |
+| Temporarily valid cloud CLI tokens | Used to operate on cloud resources while they are valid | Depends on the operation |
+| The repo's history and main | Rewritten, or faulty code merged in | Yes (git), but at a high cost |
+| The guardrails themselves (workflows, policy, specs) | Once weakened, the other lines of defence fail | Yes, provided someone notices |
+| The subscription accounts' login state | Stolen | Can be revoked |
+| Future production and databases | Deleted or leaked | No |
 
-## 威脅與控制
+## Threats and controls
 
-| # | 威脅 | 硬性控制 | 軟性控制 |
+| # | Threat | Hard controls | Soft controls |
 |---|---|---|---|
-| 1 | Agent 讀取 home 下的私人檔案 | VM 只掛載 worktree；雲端 session 不在你的機器上 | `.claude/settings.json` 的 `denyRead`；guard hook |
-| 2 | Agent 誤刪工作目錄以外的檔案（`rm -rf ~/`） | 同上：VM 內沒有那些檔案 | guard hook；專案不放在 iCloud 同步的目錄；備份 |
-| 3 | Agent 使用機器上的雲端憑證 | VM 內沒有 `~/.aws` 等目錄 | deny rules 擋雲端 CLI |
-| 4 | Prompt injection（repo 內容、issue、網頁、套件說明）誘使 agent 外送資料 | Egress allowlist；VM 內沒有值得外送的秘密，除了訂閱登入狀態與 agent token | AGENTS.md 第 7 條 |
-| 5 | Agent 安裝惡意或不存在的套件（slopsquatting、被入侵的套件） | 依賴變更一律 T2，需人類核准才能合併；安裝發生在 VM 內；egress allowlist 限制回連 | AGENTS.md 第 5 條 |
-| 6 | Agent 直接 push main、force push、刪 branch | Ruleset：main 只能經 PR；agent 是 Write 權限的 machine user，沒有 bypass | guard hook；deny rules |
-| 7 | Agent 修改 CI 讓檢查通過 | Agent token 沒有 Workflows 權限；`.github/` 在 CODEOWNERS；檢查使用 base branch 的工具與 policy | AGENTS.md 第 3 條 |
-| 8 | Agent 削弱風險規則、prompt 或工具 | `policy/`、`prompts/`、`tools/` 在 CODEOWNERS，且為 T2 | 同上 |
-| 9 | Agent 聲稱寫了測試但沒有，或寫了空測試 | `spec-trace`（依執行結果）；`red-green` | 審查 agent 的忠實度稽核 |
-| 10 | Agent 修改或刪除測試來遷就實作 | Spec 受 CODEOWNERS 保護；已通過的 TC 不得消失；`red-green` | 審查 agent 逐一檢查測試階段之後的測試變更 |
-| 11 | Agent 悄悄更改需求 | `docs/specs/` 在 CODEOWNERS；新的 push 使舊核准失效 | |
-| 12 | Agent 核准或合併自己的 PR | Agent 帳號不是 code owner；PR 由 Conductor App 開啟；App 不能核准 | deny rules 擋 `gh pr merge` |
-| 13 | Agent 偽造 `agent-review` 的結果 | Agent token 沒有 commit status 權限；Claude review 由 workflow job 寫入 | 見 guideline 4 的說明：這是最弱的一環，硬性保證不依賴它 |
-| 14 | Agent 自行部署或建立 release | Tag ruleset：`v*` 只有 admin 能建；雲端只信任來自 tag 的 OIDC；沒有長期金鑰 | |
-| 15 | Agent 刪除 production 資料庫或備份 | Agent 與 CI 沒有 production 憑證；部署角色沒有刪除備份的權限；migration 為 T2 | |
-| 16 | Secret 被 commit | `security` check 的 gitleaks | AGENTS.md 第 6 條 |
-| 17 | Conductor 失控：無限重試、大量開 PR | 每日 PR 上限、重試與 fix 輪數上限、WIP 上限、kill switch | 每日 brief |
-| 18 | 長時間運作後 agent 偏離指示 | 沒有長 session：每個 stage 是全新 context，狀態在 GitHub | |
-| 19 | 模型升級後行為改變 | 排程是決定性程式；gate 是機械檢查 | 每週稽核抽樣 |
-| 20 | Computer use、瀏覽器擴充、個人資料 connector 碰到私人資料 | 無。這些路徑不經過 VM | 規則：不開啟。見 guideline 3 |
+| 1 | The agent reads private files under home | The VM mounts only the worktree; cloud sessions are not on your machine | `denyRead` in `.claude/settings.json`; guard hook |
+| 2 | The agent deletes files outside the working directory by mistake (`rm -rf ~/`) | As above: those files are not in the VM | Guard hook; the project is not kept in a directory synced by iCloud; backups |
+| 3 | The agent uses cloud credentials on the machine | Directories such as `~/.aws` do not exist in the VM | Deny rules block the cloud CLIs |
+| 4 | Prompt injection (repo content, issues, web pages, package descriptions) induces the agent to send data out | Egress allowlist; the VM holds no secrets worth sending out, apart from the subscription login state and the agent token | AGENTS.md rule 7 |
+| 5 | The agent installs a malicious or non-existent package (slopsquatting, compromised packages) | Dependency changes are always T2 and need human approval to merge; installation happens inside the VM; the egress allowlist limits calls back out | AGENTS.md rule 5 |
+| 6 | The agent pushes straight to main, force-pushes or deletes branches | Ruleset: main can only be changed through a PR; the agent is a machine user with Write permission and no bypass | Guard hook; deny rules |
+| 7 | The agent modifies CI to make the checks pass | The agent token has no Workflows permission; `.github/` is in CODEOWNERS; the checks use the base branch's tools and policy | AGENTS.md rule 3 |
+| 8 | The agent weakens the risk rules, prompts or tools | `policy/`, `prompts/` and `tools/` are in CODEOWNERS and are T2 | As above |
+| 9 | The agent claims to have written tests but has not, or has written empty tests | `spec-verify`: traceability (based on execution results) and red-green | The review agent's faithfulness audit |
+| 10 | The agent modifies or deletes tests to suit the implementation | Specs are protected by CODEOWNERS; a TC that has passed may not disappear; red-green | The review agent checks, one by one, every test change made after the tests stage |
+| 11 | The agent quietly changes the requirements | `docs/specs/` is in CODEOWNERS; a new push invalidates earlier approvals | |
+| 12 | The agent approves or merges its own PR | The agent account is not a code owner; PRs are opened by the Conductor App; the App cannot approve | Deny rules block `gh pr merge` |
+| 13 | The agent forges the `agent-review` result | The agent token has no commit status permission; the Claude review is written by a workflow job | See the explanation in guideline 4: this is the weakest link, and the hard guarantees do not depend on it |
+| 14 | The agent deploys or creates a release on its own | Tag ruleset: only an admin can create `v*`; the cloud trusts only OIDC that comes from a tag; there are no long-lived keys | |
+| 15 | The agent deletes the production database or its backups | The agent and CI have no production credentials; the deploy role has no permission to delete backups; migrations are T2 | |
+| 16 | A secret is committed | gitleaks in the `security` check | AGENTS.md rule 6 |
+| 17 | The conductor runs away: endless retries, opening PRs in bulk | Daily PR limit, limits on retries and fix rounds, WIP limit, kill switch | Daily brief |
+| 18 | The agent drifts from its instructions after running for a long time | There are no long sessions: each stage is a fresh context, and the state lives on GitHub | |
+| 19 | Behaviour changes after a model upgrade | Scheduling is deterministic code; the gates are mechanical checks | Weekly audit sampling |
+| 20 | Computer use, browser extensions or personal-data connectors touch private data | None. These paths do not go through the VM | Rule: do not turn them on. See guideline 3 |
+| 21 | The agent writes a fake test results file directly and fools `spec-verify` | None. The test results are produced by the PR's code in the first place | `Makefile` is protected by CODEOWNERS; the review agent; weekly spot checks |
+| 22 | The two versions of a bilingual story differ in meaning: the Chinese you approved and the English the agent implements do not match | Matching structure and changing both together are enforced by `spec-lint` | The PO's own comparison; a review agent from the other vendor compares them item by item |
+| 23 | A PR's code leaves something behind on the self-hosted runner that affects later jobs | The jobs that pass judgement always run on GitHub-hosted runners; only `ci` and `security` overflow | The runner is inside the VM |
+| 24 | A maintenance session is induced to weaken the guardrails | Changes to guardrail paths always need human approval to merge | AGENTS.md rule 3: only something a human asks for directly in the session counts as a maintenance request |
+| 25 | The Actions allowance is exhausted and the gates cannot run | When the allowance runs out, PRs cannot be merged; nothing is merged without the gates | Usage estimate, overflow to self-hosted, daily brief |
 
-## 參考事故
+## Reference incidents
 
-設計時參考的公開事故類型，用來檢查上表是否有遺漏：
+The types of public incident consulted during design, used to check the table above for gaps:
 
-- Agent 在被明確要求停止變更的情況下刪除 production 資料庫（2025 年 7 月，Replit 與 SaaStr）。對應 #14、#15。
-- Agent 透過雲端平台的 API 刪除資料庫與備份（2026 年 4 月的報導）。對應 #3、#15。
-- 被入侵的 npm 套件指示本機的 AI CLI 以跳過權限確認的模式搜尋並外送 secret（2025 年 8 月，Nx 事件）。對應 #1、#4、#5。
-- 模型產生不存在的套件名稱，被搶註為惡意套件。對應 #5。
+- An agent deleted a production database after being explicitly asked to stop making changes (July 2025, Replit and SaaStr). Corresponds to #14, #15.
+- An agent deleted a database and its backups through a cloud platform's API (reports from April 2026). Corresponds to #3, #15.
+- A compromised npm package instructed the local AI CLIs to search for secrets and send them out, in the mode that skips permission prompts (August 2025, the Nx incident). Corresponds to #1, #4, #5.
+- A model produced the name of a package that did not exist, and the name was then registered as a malicious package. Corresponds to #5.
 
-後三項的細節來自二手報導，未逐一核對原始來源。
+The details of the last three items come from secondary reports and were not checked one by one against the primary sources.
 
-## 不在範圍內
+## Out of scope
 
-- 惡意的內部人員。兩位開發者被信任。
-- 廠商端的資料處理。送進模型的內容受各廠商的條款約束。
-- GitHub 本身被入侵。
+- Malicious insiders. The two developers are trusted.
+- Data handling on the vendors' side. What is sent to the models is governed by each vendor's terms.
+- A compromise of GitHub itself.

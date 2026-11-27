@@ -1,65 +1,71 @@
 # agent-dev-template
 
-讓 AI coding agent 在隔離環境中持續開發、由人類擔任 director 的專案 template。
-混用 Claude Code 與 Codex（之後加上 Ollama），只用訂閱，不需要 API key。
+*繁體中文：[README-zh-TW.md](README-zh-TW.md). The English version governs if the two differ.*
 
-兩個目標：
+A project template in which AI coding agents develop continuously inside isolated environments, with a human acting as director.
+It mixes Claude Code and Codex (Ollama to be added later) on subscriptions only. No API key is needed.
 
-1. Agent 碰不到你的私人資料，也造不成不可挽回的破壞。
-2. 你不讀一般的 PR、不 merge、不派工。你只做四件事：說出需求、核准 story、核准 sprint、放行上線。
+Two goals:
 
-## 怎麼運作
+1. Agents cannot reach your private data and cannot cause irreversible damage.
+2. You do not read ordinary PRs, merge, or dispatch work. You do only four things: state a requirement, approve stories, approve sprints, and release to production.
+
+## How it works
 
 ```
-你說一句話 ─► PO agent 寫成 story ─► 你核准
+You say one sentence ─► PO agent writes a story ─► you approve
                                        │
               ┌────────────────────────┘
               ▼
-        Conductor（無狀態的排程程式，跑在 GitHub Actions）
-              │  依核准的相依關係與優先序派工
+        Conductor (a stateless scheduling program, running in your terminal or on GitHub Actions)
+              │  dispatches work by the approved dependencies and priority
               ▼
-   design ─► tests ─► impl ─► review        每個 stage 是全新的 agent session，
-              │                              在 VM 或廠商的雲端執行
+   design ─► tests ─► impl ─► review        each stage is a brand-new agent session,
+              │                              run in a VM or in the vendor's cloud
               ▼
-   六個 required checks 全綠 ─► 合併 ─► 對照表貼回 issue
+   all five required checks green ─► merge ─► evidence table posted to the issue
               │
               ▼
-        你打 release tag ─► 部署
+        you push a release tag ─► deploy
 ```
 
-Agent 只能推 branch。其餘的每一步都由 GitHub 的 ruleset 與檢查把關，其中四項是不採信 agent 說法的機械檢查，包括「每個你核准的 test case 都有一個真的在跑、而且會隨行為改變的測試」。
+Agents can only push branches. Every other step is guarded by GitHub rulesets and checks. Four of the checks are mechanical and do not take the agent's word for anything, including "every test case you approved has a test that really runs and that changes with the behaviour".
 
-## 從哪裡開始讀
+## Where to start reading
 
-| 文件 | 內容 |
+| Document | Contents |
 |---|---|
-| [docs/guideline.md](docs/guideline.md) | 設計與理由。先讀這份 |
-| [docs/runbook.md](docs/runbook.md) | 安裝、spike、日常操作 |
-| [docs/threat-model.md](docs/threat-model.md) | 威脅與對應的控制 |
-| [docs/redteam-checklist.md](docs/redteam-checklist.md) | 驗證防線真的有效的測試清單 |
-| [docs/specs/000-example/](docs/specs/000-example/) | 一句需求變成 story 的範例 |
-| [AGENTS.md](AGENTS.md) | 所有 agent 遵守的規則 |
+| [docs/guideline.md](docs/guideline.md) | Design and rationale. Read this first |
+| [docs/runbook.md](docs/runbook.md) | Installation, spike, daily operation |
+| [docs/threat-model.md](docs/threat-model.md) | Threats and the controls that answer them |
+| [docs/redteam-checklist.md](docs/redteam-checklist.md) | Test checklist that verifies the defences really work |
+| [docs/specs/000-example/](docs/specs/000-example/) | An example of one sentence of requirement becoming a story |
+| [AGENTS.md](AGENTS.md) | The rules every agent follows |
 
-## 目錄
+## Directory layout
 
-| 路徑 | 用途 |
+| Path | Purpose |
 |---|---|
-| `tools/agentctl/` | 風險分級、spec 檢查、traceability、red-green、conductor。Python 標準函式庫，無相依 |
-| `policy/` | 風險規則、conductor 上限、角色分配、與技術棧的契約 |
-| `prompts/` | 各 stage 的指令，與廠商無關 |
-| `.github/` | Workflows、rulesets、CODEOWNERS |
-| `sandbox/` | 本機 VM、egress allowlist、VM 內的 runner |
-| `.claude/`、`codex/` | 各 harness 的設定 |
-| `docs/specs/`、`docs/sprints/`、`docs/product/` | 你核准的東西 |
+| `tools/agentctl/` | Risk tiering, spec and document checks, traceability, red-green, conductor, Actions budget estimate. Python standard library, no dependencies |
+| `policy/` | Risk rules, conductor limits, role assignment, the contract with the technology stack |
+| `prompts/` | Instructions for each stage, vendor-neutral |
+| `.github/` | Workflows, rulesets, CODEOWNERS |
+| `sandbox/` | Local VM, egress allowlist, the runner inside the VM |
+| `.claude/`, `codex/` | Settings for each harness |
+| `docs/specs/`, `docs/sprints/`, `docs/product/` | The things you approve |
 
-## 狀態
+## Status
 
-工具層有單元測試並通過；red-green 在真實的 git repo 上端對端驗證過。
-與真實 GitHub API、兩家雲端服務、macOS sandbox 的整合還沒在實機上跑過，
-清單在 [guideline 第 9 節](docs/guideline.md#9-已驗證與未驗證)，驗證步驟在 runbook 的 spike 一節。
-在完成 spike 與 red-team checklist 之前，不要讓它無人看管地運轉。
+The tooling layer has unit tests and they pass. Red-green has been verified end to end on a real git repo.
+Integration with the real GitHub API, the two cloud services and the macOS sandbox has not yet been run on real machines.
+The list is in [section 9 of the guideline](docs/guideline.md#9-verified-and-not-yet-verified), and the verification steps are in the spike section of the runbook.
+Until the spike and the red-team checklist are complete, do not let it run unattended.
 
-## 指令
+## Languages
+
+For documents, English is the primary file. Traditional Chinese sits next to it in the same directory under a file name ending in `-zh-TW`. Stories work the same way: `story.md` is what agents implement from, and `story-zh-TW.md` is the version the director reads and approves.
+
+## Commands
 
 ```bash
 make lint
@@ -71,4 +77,8 @@ make test
 
 ```bash
 bin/agentctl --help
+```
+
+```bash
+bin/agentctl conductor here
 ```

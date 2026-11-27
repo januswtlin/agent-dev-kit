@@ -198,8 +198,6 @@ gh workflow run conductor.yml -f dry_run=true
 
 Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡與錯誤訊息：
 
-同時記下這些數字並回填 guideline 第 6 節的表：測試套件跑一次的分鐘數、一個 story 從開始到合併觸發了幾次完整的 gate、Actions 的 Usage 頁面顯示這個 story 用掉多少。
-
 | 卡住的地方 | 處理 |
 |---|---|
 | Conductor 讀狀態時出錯 | 修 `tools/agentctl/github.py` 的 `collect`。它還沒對真實 API 跑過 |
@@ -207,6 +205,8 @@ Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡
 | Agent 沒有加 `done:*` label | 檢查 agent 身分是否有 Issues 寫入權；必要時在 prompt 中加強 |
 | `agent-review` 一直 pending | 檢查 `CLAUDE_CODE_OAUTH_TOKEN`、`REVIEW_BOTS`，以及 action 的輸入參數 |
 | PR 開了但 checks 沒跑 | PR 必須由 Conductor App 開啟，不是 `GITHUB_TOKEN` |
+
+同時記下這些數字並回填 guideline 第 6 節的表：測試套件跑一次的分鐘數、一個 story 從開始到合併觸發了幾次完整的 gate、Actions 的 Usage 頁面顯示這個 story 用掉多少。
 
 ## 8. Red-team
 

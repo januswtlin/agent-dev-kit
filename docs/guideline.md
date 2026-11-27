@@ -1,260 +1,318 @@
-# AI Coding Agent 開發環境 Guideline
+# Guideline for the AI Coding Agent Development Environment
 
-這份文件說明這個 repo 的設計：為什麼這樣做、各部分如何配合、哪些已驗證、哪些還沒有。
-安裝步驟在 [runbook.md](runbook.md)，威脅與對應的控制在 [threat-model.md](threat-model.md)。
+*繁體中文：[guideline-zh-TW.md](guideline-zh-TW.md). The English version governs if the two differ.*
 
-## 1. 目標
+This document explains the design of this repo: why it is built this way, how the parts fit together, what has been verified and what has not.
+Installation steps are in [runbook.md](runbook.md). Threats and the controls that answer them are in [threat-model.md](threat-model.md).
 
-1. **Agent 碰不到你的私人資料，也造不成不可挽回的破壞。** 依嚴重性：讀取私人檔案（讀了就收不回）、誤刪工作目錄以外的檔案、使用機器上暫時有效的雲端憑證、未來的 production。
-2. **人類注意力是瓶頸。** 你是 director：決定做什麼、核准範圍、放行上線。你不讀一般的 PR、不做 merge、不派工。
+## 1. Goals
 
-團隊現況：兩位開發者，Claude Max 與 ChatGPT 訂閱，不使用按量付費的 API key，GitHub Team 方案。
+1. **Agents cannot reach your private data and cannot cause irreversible damage.** In order of severity: reading private files (once read, it cannot be taken back), deleting files outside the working directory by mistake, using temporarily valid cloud credentials on the machine, and, in future, production.
+2. **Human attention is the bottleneck.** You are the director: you decide what to build, approve the scope, and release to production. You do not read ordinary PRs, merge, or dispatch work.
 
-## 2. 三個原則
+The team today: two developers, Claude Max and ChatGPT subscriptions, no pay-as-you-go API keys, GitHub Team plan.
 
-**用能力邊界防護，不靠 agent 自律。** Prompt、permission 設定、指令黑名單都可能被繞過，只當第二層。真正的保證是：agent 所在的環境裡不存在能造成損害的東西。它看不到你的 home，手上的 token 沒有危險的權限。
+## 2. Three principles
 
-**GitHub 是唯一的 control plane。** 所有 harness 只透過 branch、PR、issue 交接。換模型、換廠商、加入本地模型都不改變流程，也因此不需要 API key：每家模型在自家的 harness 裡用訂閱額度執行。
+**Protect with capability boundaries, not with agent self-discipline.** Prompts, permission settings and command blocklists can all be bypassed, so they only count as a second layer. The real guarantee is that nothing capable of causing damage exists in the environment where the agent runs. It cannot see your home directory, and the token it holds has no dangerous permissions.
 
-**機械檢查優先於 agent 的自述。** Agent 會過早宣告完成，也會高估自己的產出。凡是能用程式驗證的（測試是否真的存在並執行、是否真的驗到行為），就不問 agent。
+**GitHub is the only control plane.** All harnesses hand work over only through branches, PRs and issues. Changing models, changing vendors or adding a local model does not change the process. This is also why no API key is needed: each vendor's model runs in its own harness on subscription quota.
 
-## 3. 信任區域
+**Mechanical checks take precedence over what the agent says about itself.** Agents declare completion too early and overestimate their own output. Whatever can be verified by a program (whether a test really exists and runs, whether it really exercises the behaviour) is not asked of the agent.
 
-| Zone | 內容 | Agent 能做什麼 |
+## 3. Trust zones
+
+| Zone | Contents | What an agent can do |
 |---|---|---|
-| 0 你的 Mac | 私人資料、瀏覽器、Keychain、暫時有效的雲端 token、Ollama | Coding agent 不在這裡執行 |
-| 1 Sandbox | 本機的 VM，或廠商的雲端 session。只有專案的 worktree | 在裡面有完整自主權；出不去 |
-| 2 GitHub | Rulesets、required checks、CODEOWNERS | 只能推 branch；其餘都要過 gate |
-| 3 Production | 雲端資源、資料庫 | 無。只有人類打的 release tag 能觸發部署 |
+| 0 Your Mac | Private data, browser, Keychain, temporarily valid cloud tokens, Ollama | Coding agents do not run here |
+| 1 Sandbox | A local VM, or the vendor's cloud session. Only the project's worktree | Full autonomy inside; cannot get out |
+| 2 GitHub | Rulesets, required checks, CODEOWNERS | Can only push branches; everything else must pass the gates |
+| 3 Production | Cloud resources, databases | Nothing. Only a release tag pushed by a human can trigger a deployment |
 
-### Zone 1 的規則
+### Rules for Zone 1
 
-**Coding agent 一律在 VM 或雲端執行，不直接跑在 Mac 的使用者帳號下。**
+**Coding agents always run in a VM or in the cloud, never directly under a user account on the Mac.**
 
-Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設允許讀取幾乎整個檔案系統，而且只涵蓋 Bash，不涵蓋檔案工具、MCP server 與 hooks；Codex 的 `workspace-write` 也只限制寫入。它們防誤刪有效，防讀取則要靠你把每個路徑都列對。VM 的掛載是預設拒絕：沒掛進去的東西不存在。
+The sandbox built into a harness is not enough to protect privacy. Claude Code's sandbox allows reading almost the whole file system by default, and it covers only Bash, not the file tools, MCP servers or hooks. Codex's `workspace-write` likewise restricts only writes. They work against accidental deletion, but protection against reading depends on you listing every path correctly. A VM's mounts are deny by default: what is not mounted does not exist.
 
-本機 sandbox 的三個性質（`sandbox/`）：
+Three properties of the local sandbox (`sandbox/`):
 
-- 獨立 kernel 的 VM，只掛載專案的 worktree。
-- 對外連線限於 `sandbox/allowlist.txt`。這同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
-- VM 內只有 agent 的 GitHub token（見 3.2），沒有 SSH key、雲端憑證。
+- A VM with its own kernel, mounting only the project's worktree.
+- Outbound connections are limited to `sandbox/allowlist.txt`. This limits both data exfiltration after a prompt injection and callbacks from malicious packages.
+- Inside the VM there is only the agent's GitHub token (see "Identities and tokens" below). No SSH keys, no cloud credentials.
 
-兩種實作：Docker Sandboxes（`sbx`，每個 agent 一個 microVM，以主機名稱過濾連線）與 Lima（`sandbox/vm.sh`，以位址過濾，較寬鬆）。Repo 內附的是 Lima 的腳本，因為它的設定格式穩定、可以完整寫出來；`sbx` 的隔離較嚴，確認其行為後建議改用。兩者都還沒在實機驗證，見第 9 節。
+Two implementations: Docker Sandboxes (`sbx`, one microVM per agent, connections filtered by host name) and Lima (`sandbox/vm.sh`, filtered by address, which is looser). The repo ships the Lima scripts because Lima's configuration format is stable and can be written out in full. `sbx` isolates more strictly, and switching to it is recommended once its behaviour has been confirmed. Neither has been verified on a real machine yet; see section 9.
 
-雲端 session（Claude Code on the web、Codex cloud）是廠商管理的 VM，完全碰不到你的筆電，是隱私上最強的隔離，也是筆電闔上時唯一能繼續工作的地方。環境的網路設為受限，不放任何 secret。
+Cloud sessions (Claude Code on the web, Codex cloud) are vendor-managed VMs that cannot reach your laptop at all. They are the strongest isolation for privacy, and the only place where work can continue while the laptop is closed. Set the environment's network to restricted and put no secrets in it.
 
-### Mac 上的衛生規則
+### Hygiene rules on the Mac
 
-`bin/agentctl doctor` 會檢查其中可以檢查的項目。
+`bin/agentctl doctor` checks those of the following that can be checked.
 
-- 專案放在 `~/dev` 之類不受 iCloud 同步的位置。iCloud 同步的目錄被誤刪會同步到所有裝置。
-- Terminal 與 IDE 不授予 Full Disk Access。這個權限會被在其中執行的任何程式繼承。
-- 不對 agent 類的桌面 app 開啟 computer use、螢幕錄製、輔助使用；不在日常使用的瀏覽器 profile 安裝 agent 擴充功能；不把個人的 Gmail、Drive、iCloud 接成 agent 的 connector 或 MCP server。這些路徑繞過 VM 直接碰到私人資料，而且沒有技術手段能強制，只能靠不開啟。
-- 開啟 Time Machine 或等效的備份。
-- 選配：為開發另建一個 macOS 標準使用者帳號。私人資料在另一個帳號下，檔案權限就擋住了讀取。代價是切換帳號的麻煩。
+- Keep projects somewhere not synced by iCloud, such as `~/dev`. An accidental deletion in an iCloud-synced directory syncs to every device.
+- Do not grant Full Disk Access to the terminal or the IDE. Any program run inside them inherits that permission.
+- Do not enable computer use, screen recording or accessibility for agent-type desktop apps. Do not install agent extensions in the browser profile you use every day. Do not connect personal Gmail, Drive or iCloud as an agent connector or MCP server. These paths bypass the VM and reach private data directly, and there is no technical means to enforce the rule. It holds only by not turning them on.
+- Turn on Time Machine or an equivalent backup.
+- Optional: create a separate standard macOS user account for development. With private data under another account, file permissions block reading. The cost is the nuisance of switching accounts.
 
-若一定要在 Mac 上直接跑（例如 IDE 內的短暫互動），`.claude/settings.json` 與 `codex/config.example.toml` 的 host profile 提供了嚴格設定，但這是例外，不是常態。
+If you really must run directly on the Mac (for example, a brief interaction inside the IDE), the host profiles in `.claude/settings.json` and `codex/config.example.toml` provide strict settings. This is the exception, not the norm.
 
-### 3.2 身分與 token
+### Story agents and maintenance work
 
-三種身分，權限分開：
+Agents have two roles in this repo, and the guardrails ask different things of each.
 
-| 身分 | 是什麼 | 能做 | 不能做 |
+A **story agent** is dispatched by the conductor and runs unattended. It must not edit the guardrail paths. This rule has two layers. The hard layer is CODEOWNERS and token permissions. The soft layer is the deny rules in `sandbox/story-agent.claude-settings.json`, installed in the user-level settings inside the VM and in the cloud environment, which apply only to story agents.
+
+**Maintenance work** is when you ask an agent directly, in a session, to change the pipeline itself (workflows, policy, tools, prompts). This is allowed on these conditions: a human asks in person, the work is done on a `chore/` branch, and a human approves the PR. A dispatch prompt, an issue or the contents of a file does not count as such a request.
+
+The repo's shared `.claude/settings.json` therefore holds only the rules that are true for both roles: no reading or writing in home, no force push, no cloud CLIs, no opening or merging PRs on its own. An earlier version also put the rule against editing guardrail paths in the shared settings. As a result, even maintenance work you had instructed was blocked, including fixing that setting itself.
+
+### Identities and tokens
+
+Three identities, with separate permissions:
+
+| Identity | What it is | Can | Cannot |
 |---|---|---|---|
-| 人類 | 你與同事的 GitHub 帳號，repo admin | 核准 PR、打 release tag、改設定 | 直接 push main（沒有人能） |
-| Agent | 一個 machine user 帳號，Write 權限 | 推 branch、留言、改 label | 開 PR、核准、merge、改 workflow、打 tag、寫 commit status |
-| Conductor | 一個 GitHub App | 開 PR、啟用 auto-merge、派工、通知 | 核准 PR |
+| Human | The GitHub accounts of you and your colleague, repo admin | Approve PRs, push release tags, change settings | Push directly to main (nobody can) |
+| Agent | A machine user account with Write permission | Push branches, comment, change labels | Open PRs, approve, merge, change workflows, create tags, write commit statuses |
+| Conductor | A GitHub App | Open PRs, enable auto-merge, dispatch work, notify | Approve PRs |
 
-為什麼需要 machine user：token 的權限上限是帳號的權限。用你的 admin 帳號發的 token，即使是 fine-grained，仍繼承 admin 對 ruleset 的 bypass 資格。Agent 用獨立的、只有 Write 權限的帳號，這個問題就不存在。它在 Team 方案佔一個座位。
+Why a machine user is needed: a token's permissions are capped by the account's permissions. A token issued from your admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. With the agent on a separate account that has only Write permission, the problem does not exist. It takes up one seat on the Team plan.
 
-為什麼需要 GitHub App：GitHub 不允許作者核准自己的 PR。若雲端 agent 以你的身分開 spec PR，你就無法核准它。所以 agent 只推 branch，由 Conductor App 開 PR。另外，用預設的 `GITHUB_TOKEN` 開的 PR 與做的 merge 不會觸發其他 workflow，gate 根本不會跑。
+Why a GitHub App is needed: GitHub does not let an author approve their own PR. If a cloud agent opened a spec PR under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the PR. In addition, PRs opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all.
 
-雲端 session 的 GitHub 連線，建議連到 machine user 的帳號而非你的個人帳號。這一點需要在 spike 中確認兩家服務是否支援。
+For the GitHub connection of cloud sessions, connecting to the machine user's account rather than your personal account is recommended. Whether the two services support this needs to be confirmed in the spike.
 
-## 4. Gate：merge 之前必須成立的事
+## 4. Gates: what must hold before a merge
 
-`main` 的 ruleset（`.github/rulesets/main.json`）沒有 bypass 名單，對人與 agent 一視同仁：
+The ruleset for `main` (`.github/rulesets/main.json`) has no bypass list and treats humans and agents alike:
 
-- 禁止直接 push、force push、刪除；只能經 PR 以 squash 合併；branch 必須與 main 同步。
-- 六個 required checks 全綠。
-- 觸及 CODEOWNERS 所列路徑時，需要 owner（人類）核准；新的 push 會讓舊的核准失效。
+- No direct push, no force push, no deletion. Merging only through a PR, by squash. The branch must be up to date with main.
+- All five required checks green.
+- When a path listed in CODEOWNERS is touched, an owner (a human) must approve. A new push invalidates earlier approvals.
 
-| Check | 驗證什麼 | 由誰判定 |
+| Check | What it verifies | Judged by |
 |---|---|---|
-| `ci` | lint、全部測試 | 程式 |
-| `security` | secret 掃描、靜態分析 | 程式 |
-| `spec-trace` | 每個核准的 test case 都對應到實際執行且通過的測試；已通過的不得消失 | 程式 |
-| `red-green` | Story 的測試在 main 上會失敗、在 branch 上通過 | 程式 |
-| `risk-gate` | 風險分級；T2 需要人類對目前的 commit 核准 | 程式 + 人 |
-| `agent-review` | 不同 agent 對實作與測試忠實度的審查 | Agent |
+| `ci` | Lint, all tests | Program |
+| `security` | Secret scanning, static analysis | Program |
+| `spec-verify` | Traceability: every approved test case maps to a test that actually ran and passed, and one that has passed may not disappear. Red-green: the story's tests fail on main and pass on the branch | Program |
+| `risk-gate` | Risk tiering; T2 needs a human approval of the current commit | Program + human |
+| `agent-review` | A different agent's review of the implementation and of how faithful the tests are | Agent |
 
-`spec-trace`、`red-green`、`risk-gate` 執行時使用 **base branch 的工具與 policy**，所以一個 PR 無法修改審判自己的規則。
+`spec-verify` and `risk-gate` run with **the tools and policy of the base branch**, so a PR cannot change the rules that judge it. `spec-verify` itself runs none of the PR's code: the tests run in the `ci` job, and the results are handed to `spec-verify` as files for judgement.
 
-### 風險分級
+A story's PR is opened as a draft. A draft runs only lint. When the implementation stage is complete, the conductor marks it ready for review, and only then do the full gates run. This saves Actions budget; see section 6.
 
-`policy/risk-tiers.toml`：
+### Risk tiers
 
-- **T0** 純文件。Checks 綠即可。
-- **T1** 屬於某個已核准 story 的程式變更。Checks 與 agent review 通過即可。
-- **T2** 需要人類核准。包括：護欄本身（`.github/`、`policy/`、`tools/`、`prompts/` 等）、spec 與 sprint、高風險程式路徑（auth、付款、migration、infra）、任何依賴的新增或變更、超過大小門檻的 diff、不屬於任何 story 的程式變更。
+`policy/risk-tiers.toml`:
 
-測試檔不算 T0。削弱一個測試就是行為變更。
+- **T0** Documentation only. Green checks are enough.
+- **T1** A code change that belongs to an approved story. Passing checks and agent review are enough.
+- **T2** Needs human approval. This covers: the guardrails themselves (`.github/`, `policy/`, `tools/`, `prompts/` and so on), specs and sprints, high-risk code paths (auth, payments, migrations, infra), any dependency added or changed, a diff over the size threshold, and a code change that belongs to no story.
 
-### 「AI 說會寫 test XYZ，不代表真的寫了」
+Test files are not T0. Weakening a test is a change in behaviour.
 
-你核准的 story 裡，每個 test case 有一個 ID（`TC-012-03`）。之後四層檢查，前三層不依賴任何 agent 的說法：
+### "The AI saying it will write test XYZ does not mean it really did"
 
-1. **Traceability。** 測試名稱必須帶 TC ID。CI 讀測試執行器輸出的 JUnit XML，確認每個 ID 都有至少一個實際執行且通過的測試。被 skip 的、不存在的、只寫在註解裡的都不算。依據是執行結果，不是搜尋原始碼。
-2. **Red-green。** 把 PR 的測試檔疊到 main 上執行，必須失敗；在 PR 上必須通過。`assert True` 這種空測試在 main 上就會通過，因而被擋下。
-3. **不得消失。** 在 main 上通過的 TC，之後不能不見。Spec 本身受 CODEOWNERS 保護，agent 不能悄悄刪掉一條 TC。
-4. **忠實度稽核。** 審查 agent（不同於寫測試與寫實作的 agent）對每個 TC 逐條判斷：測試的斷言是否真的驗證了描述的行為。這層補的是前三層看不到的情況：測試存在、會紅會綠，但驗的是錯的東西。
+In a story you have approved, every test case has an ID (`TC-012-03`). Four layers of checks follow, and the first three do not depend on anything an agent says:
 
-Merge 之後，`evidence` workflow 把「AC → TC → 測試 → 結果」的對照表貼到 story 的 issue 上。你看這張表，不用讀程式。
+1. **Traceability.** The test name must carry the TC ID. CI reads the JUnit XML that the test runner outputs and confirms that every ID has at least one test that actually ran and passed. Tests that are skipped, that do not exist, or that are only mentioned in a comment do not count. The basis is the execution result, not a search of the source code.
+2. **Red-green.** The PR's test files are overlaid on main and run, and they must fail. On the PR they must pass. An empty test such as `assert True` passes on main already, and is therefore blocked.
+3. **No disappearing.** A TC that passed on main may not go missing later. The spec itself is protected by CODEOWNERS, so an agent cannot quietly delete a TC.
+4. **Fidelity audit.** The review agent (different from the agents that wrote the tests and the implementation) judges each TC one by one: do the test's assertions really verify the behaviour described? This layer covers the case the first three cannot see: the test exists and goes red and green, but verifies the wrong thing.
 
-這套保證的邊界：它確保你核准的每個 TC 都有一個會隨行為改變的測試在跑。它不保證 TC 清單本身完整。清單的完整性取決於 PO 的提問與你核准 story 時的審閱。
+The first three layers are run by the single check `spec-verify`.
 
-### `agent-review` 的強度
+After the merge, the `evidence` workflow posts the "AC → TC → test → result" table to the story's issue. You read that table, not the code.
 
-這是六個 check 裡唯一由 agent 判定的，強度也最弱，要誠實說明。
+This guarantee has two limits. First, it ensures that every TC you approved has a running test that changes with the behaviour, but it does not guarantee that the list of TCs is itself complete. The completeness of the list depends on the PO's questions and on your reading when you approve the story. Second, the test results are produced by the PR's code, and an agent is able to write a fake results file directly. There is no hard defence against this. It relies on the `Makefile` being protected, the review agent and the weekly spot check.
 
-Claude 的 review 以 workflow job 的形式執行，由 job 自己寫入 status，實作 agent 的 token 沒有這個權限，所以無法偽造。Codex 的 review 來自它的 GitHub 整合，由 `bridge` job 轉成 status。若 review 改在一般的雲端 session 中進行，審查者與實作者可能是同一個 GitHub 身分，這時無法從身分上區分兩者。
+### The strength of `agent-review`
 
-因此設計上不讓任何硬性保證依賴 `agent-review`。高風險變更有人類核准，測試的存在與有效性有機械檢查。Agent review 提供的是語意層的把關，錯放的代價由其他 gate 限制。
+This is the only one of the five checks judged by an agent, and also the weakest. That should be stated honestly.
 
-## 5. 從一行字到 production
+Claude's review runs as a workflow job, and the job itself writes the status. The implementation agent's token does not have that permission, so it cannot forge it. Codex's review comes from its GitHub integration and is turned into a status by the `bridge` job. If the review is instead done in an ordinary cloud session, the reviewer and the implementer may be the same GitHub identity, and in that case the two cannot be told apart by identity.
+
+The design therefore lets no hard guarantee depend on `agent-review`. High-risk changes have human approval, and the existence and validity of tests have mechanical checks. Agent review provides a check at the semantic level, and the cost of a wrong pass is bounded by the other gates.
+
+## 5. From one line to production
 
 ```
-Stage 0  你說一句話（PO chat，或寫進 roadmap）
-Stage 1  PO agent 產出 story                    → 你核准 spec PR        【Gate 1】
-Stage 2  design   設計 agent 寫設計文件
-Stage 3  tests    測試 agent 只根據 story 寫測試（此時必須是紅的）
-Stage 4  impl     實作 agent 讓測試變綠
-Stage 5  review   審查 agent 審實作並稽核測試
-Stage 6  六個 check 全綠 → auto-merge → evidence 表貼到 issue
-Stage 7  你打 v* tag → 部署 production                                   【Gate 2】
+Stage 0  You say one sentence (PO chat, or write it into the roadmap)
+Stage 1  PO agent produces the story            → you approve the spec PR 【Gate 1】
+Stage 2  design   the design agent writes the design document
+Stage 3  tests    the test agent writes tests from the story alone (they must be red at this point)
+Stage 4  impl     the implementation agent turns the tests green
+Stage 5  review   the review agent reviews the implementation and audits the tests
+Stage 6  all five checks green → auto-merge → evidence table posted to the issue
+Stage 7  you push a v* tag → deploy to production                         【Gate 2】
 ```
 
-每個 stage 是一個全新的 agent session，沒有前一個 session 的記憶。它需要的一切都在 spec、story issue、branch 與 commit 歷史裡。指令在 `prompts/`，與廠商無關。
+Each stage is a brand-new agent session with no memory of the previous session. Everything it needs is in the spec, the story issue, the branch and the commit history. The instructions are in `prompts/` and are vendor-neutral.
 
 ### AI Product Owner
 
-你的需求通常是一句話。PO（`prompts/product-owner.md`）把它變成你能在兩分鐘內核准的 story。
+Your requirement is usually one sentence. The PO (`prompts/product-owner.md`) turns it into a story you can approve within two minutes.
 
-- 它先讀 `docs/product/` 的領域文件與相關的既有 story，檢查新需求是否與既有行為衝突。
-- 最多問五個問題，而且只問「會改變要做什麼、且事後難以反悔」的：金流與訂單狀態、失敗與退回之後怎麼辦、誰有權限、資料保存與對外通知。其餘自行決定並列為假設。
-- 產出 `story.md`（你讀的，限 80 行）與 `spec.toml`（機器讀的）。範例見 `docs/specs/000-example/`，就是「轉帳付款附憑證」那句話的結果。
+- It first reads the domain documents in `docs/product/` and the related existing stories, and checks whether the new requirement conflicts with existing behaviour.
+- It asks at most five questions, and only those that "would change what is to be built and are hard to undo afterwards": payment flow and order states, what happens after a failure or a rejection, who has permission, data retention and outbound notifications. It decides the rest itself and lists those decisions as assumptions.
+- It produces three files: `story.md` (English, what agents implement and review against), `story-zh-TW.md` (Traditional Chinese, the version you read and approve) and `spec.toml` (machine-readable). Each of the two stories is limited to 80 lines. For an example see `docs/specs/000-example/`, which is the result of the sentence about paying by bank transfer with proof of payment.
 
-兩種模式：**chat**，你在手機或桌面上與它對話，適合想深入討論的需求；**async**，你只在 `docs/product/roadmap.md` 加一行，conductor 會派 PO 起草 spec PR，問題寫在 PR 描述裡，你用 review comment 回答。你回來時面對的是可以直接核准或簡短回覆的 spec。未核准的 spec PR 上限是三個，避免堆積。
+You approve the Chinese and the agents read the English. The gap in meaning between the two is the main risk of bilingual stories. It is handled in three layers. `spec-lint` checks that the AC and TC IDs of the two files are the same and in the same order, and that the sections are the same. CI checks that the two files must change together in the same PR. The PO compares them item by item after writing, and the review agent from the other vendor compares them item by item once more, treating a difference in meaning as blocking. The first two layers are mechanical checks. The third is an agent's judgement, not a hard guarantee. If the two differ, the English version governs, because that is the version actually implemented.
 
-核准的方式是在 GitHub approve 那個 PR，手機 app 即可。不用 label 當核准訊號，因為 agent 能改 label。
+Two modes. **chat**: you talk with it on your phone or desktop, which suits requirements you want to discuss in depth. **async**: you only add a line to `docs/product/roadmap.md`, the conductor dispatches the PO to draft a spec PR, the questions are written in the PR description, and you answer with review comments. When you come back, what you face is a spec you can approve directly or answer briefly. Unapproved spec PRs are capped at three, to avoid a pile-up.
 
-### 角色分配
+You approve by approving that PR on GitHub. The mobile app is enough. Labels are not used as the approval signal, because agents can change labels.
 
-`policy/roles.toml` 按開發者設定每個 stage 用哪個 harness，並有 fallback 順序。原則是讓審查者與實作者不同廠商。
+### Role assignment
 
-實際的限制是額度。實作是最耗 token 的 stage。你的 Codex 額度來自 ChatGPT Plus，不足以長時間擔任實作，所以你名下 story 的預設是 Claude 設計、寫測試、實作，Codex 審查。同事只有 ChatGPT Pro，他名下的 story 各 stage 都是獨立的 Codex session；跨廠商的多樣性較弱，由機械檢查承擔主要保證。升級方案後改設定即可。
+`policy/roles.toml` sets, per developer, which harness each stage uses, with a fallback order. The principle is for the reviewer and the implementer to be from different vendors.
 
-## 6. 持續運轉：Conductor
+The practical constraint is quota. Implementation is the most token-hungry stage. Your Codex quota comes from ChatGPT Plus, which is not enough to act as implementer for long periods. So the default for stories under your name is Claude for design, tests and implementation, with Codex reviewing. Your colleague has only ChatGPT Pro, so every stage of the stories under his name is a separate Codex session. Cross-vendor diversity is weaker there, and the mechanical checks carry the main guarantee. After a plan upgrade, changing the settings is all that is needed.
 
-你不在的時候，是 conductor 在推動工作。
+## 6. Continuous operation: the conductor
 
-### 它是什麼
+When you are away, it is the conductor that moves work forward.
 
-一支沒有狀態、不含 LLM 的程式（`agentctl reconcile`），跑在 GitHub Actions 上。每次執行都讀出完整的現況：sprint、spec、issue、PR、check 結果，算出現在該發生的下一件事，然後去做。它自己不記任何東西；所有記憶都在 GitHub 上（label、issue 關聯、隱藏的 marker 留言）。因此中斷、重跑、漏掉事件都無妨，下一次執行會得到同樣的結論。
+### What it is
 
-觸發有兩種：GitHub 事件讓它即時反應，每小時一次的排程抓停滯與漏接。
+A program with no state and no LLM (`agentctl reconcile`). It can run in a terminal on your Mac, and it can run on GitHub Actions. On every run it reads the complete current situation: sprint, specs, issues, PRs, check results. It works out the next thing that should happen now, then does it. It remembers nothing itself. All memory is on GitHub (labels, issue links, hidden marker comments). So interruptions, reruns and missed events do no harm: the next run reaches the same conclusion.
 
-### 順序的判斷從哪裡來
+### Where the conductor runs
 
-一支程式無法判斷 story 該先做哪個。它也不需要，因為判斷發生在別處：
+The conductor is a deterministic program, not an agent, so running it directly on your Mac is safe, and it uses no Actions budget.
 
-**規劃時，由 agent 判斷，你核准。** Planner（`prompts/planner.md`）讀所有候選 story 與程式碼，為每個 story 確定 `depends_on`（必須先合併的 story）、`touches`（會動到的模組與共用資源）、`priority`。這些寫在 `spec.toml` 裡，隨 sprint PR 給你核准。你核准的是範圍與優先序。
+- **You are at the computer**: `bin/agentctl conductor here`. It polls every three minutes, and each time it reads the approved sprint, specs and policy from `origin/main`, not from the contents of your working directory.
+- **You are going out**: `bin/agentctl conductor away`, or just press Ctrl-C. This hands over to GitHub Actions.
+- **You close the laptop without handing over**: the local conductor renews a lease on every run. The scheduled Actions run, every four hours, checks it and takes over automatically if it has not been renewed for more than 20 minutes.
 
-**執行時，由程式計算。** 一個 story 可以開工的條件：相依的 story 都已合併、沒有被標為 blocked、它的 `touches` 與進行中的 story 沒有交集、未超過同時進行的上限。符合條件的依 priority、能解鎖的下游數量、編號排序。同樣的輸入永遠得到同樣的結果，不耗額度，可以完整地單元測試。
+Two repo variables ensure that only one side acts at a time: `CONDUCTOR_HOME` (`local` or `actions`) and `CONDUCTOR_LEASE`. While the local side holds the lease, event-triggered runs on Actions are skipped and use no minutes.
 
-**出狀況時，由一個短命的 triage session 判斷。** 規劃出來的相依關係會有錯，常見的是做到一半才發現需要另一個還沒完成的 story。Conductor 偵測到 stage 反覆失敗或停滯時，啟動 triage agent（`prompts/triage.md`）。它只能做三件事：追加一條「blocked by」關聯、要求重試並說明該怎麼做不同、或升級給你並附上選項。它不能改 spec、不能改 sprint 範圍、不能動程式或測試。
+On Actions, events are the main driver (`ci` completing, a PR closing, a review being submitted, a label changing on an issue). The schedule only catches stalls and missed events. A local run uses your own `gh` login. The trigger URL and token needed for dispatching are kept in `.env.conductor` (listed in `.gitignore`).
 
-### 為什麼不掛一個長時間的 LLM session 來監督
+### Where the judgement about order comes from
 
-長 session 的狀態在它的 context 裡。Context 會被壓縮而遺失指示，session 中斷後無法完整恢復，行為難以稽核，而且持續消耗額度。把狀態放在 GitHub、每次判斷都用全新的 context，這些問題不存在。
+A program cannot judge which story should be done first. It does not need to, because the judgement happens elsewhere:
 
-現有工具的經驗指向同一邊。以 LLM 擔任協調者的 Gas Town，作者表示它在模型升級後失效，agent 轉而不斷修改 harness 本身（這項來自二手報導）。Claude Code 的 agent teams 文件記載 lead 會提早結束、任務狀態落後而卡住下游。Anthropic 關於 long-running agent 的工程文章主張每個 session 從全新 context 開始，連續性放在檔案與 git。最接近本設計的是 OpenAI Symphony：決定性的 reconcile 迴圈，以 issue tracker 為事實來源；它只支援 Codex 與 Linear，所以這裡採用它的做法而非它的實作。
+**At planning time, an agent judges and you approve.** The planner (`prompts/planner.md`) reads all candidate stories and the code, and settles for each story its `depends_on` (stories that must be merged first), `touches` (the modules and shared resources it will change) and `priority`. These are written in `spec.toml` and come to you for approval with the sprint PR. What you approve is the scope and the priority order.
 
-### 會做與不會做的事
+**At run time, a program computes.** A story may start when: the stories it depends on are all merged, it is not marked blocked, its `touches` do not intersect those of stories in progress, and the limit on stories in progress at once is not exceeded. Those that qualify are ordered by priority, by the number of downstream stories they unblock, and by number. The same input always gives the same result, uses no quota, and can be unit tested in full.
 
-- 某個 story 在等你時，繞過它做別的。等你的 story 不佔同時進行的名額。
-- Sprint 裡所有未完成的 story 都卡在你身上時，全部停下，通知你一次。
-- Sprint 完成、下一個尚未核准時，開發停止。只有 spec 的起草繼續。它不會自行擴張範圍。
-- PR 落後 main 時更新 branch；有衝突時派解衝突的任務。
-- main 變紅時停止派發，只派一個修復任務。
-- 某個 harness 額度用盡時改用 fallback，都用盡就等待。
-- 所有 gate 通過後啟用 auto-merge，但只限 `policy/conductor.toml` 的 `auto_merge_tiers` 所列的分級。
+**When something goes wrong, a short-lived triage session judges.** Planned dependencies will contain mistakes. A common one is discovering halfway through that another, unfinished story is needed. When the conductor detects a stage failing repeatedly or stalling, it starts a triage agent (`prompts/triage.md`). It can do only three things: add a "blocked by" link, ask for a retry and explain what to do differently, or escalate to you with options. It cannot change the spec, cannot change the sprint scope, and cannot touch code or tests.
 
-### 保險絲
+### Why not keep a long-running LLM session as supervisor
 
-- **Kill switch**：把 repo variable `CONDUCTOR_PAUSED` 設為 `true`，下一次執行起停止一切派發。
-- 上限：同時進行的 story 數、每日開啟的 PR 數、同一 stage 的重試次數、fix 與 review 的來回輪數、triage 次數。超過就升級給你，不會無限重試。
+A long session's state is in its context. Context gets compacted and instructions are lost, a session cannot be fully restored after an interruption, its behaviour is hard to audit, and it consumes quota continuously. With the state on GitHub and a brand-new context for every judgement, these problems do not exist.
 
-### Agent 在哪裡跑
+Experience with existing tools points the same way. For Gas Town, which uses an LLM as coordinator, the author says it stopped working after a model upgrade, with agents turning to modifying the harness itself over and over (this item comes from secondary reports). The Claude Code agent teams documentation records that the lead finishes early and that task status lags behind and blocks downstream work. Anthropic's engineering article on long-running agents argues for starting every session from a brand-new context and keeping continuity in files and git. The closest to this design is OpenAI Symphony: a deterministic reconcile loop with the issue tracker as the source of truth. It supports only Codex and Linear, so this repo adopts its approach rather than its implementation.
 
-| 位置 | 如何啟動 | 筆電要開著嗎 |
+### What it does and does not do
+
+- When a story is waiting on you, it goes around it and works on something else. A story waiting on you does not take one of the slots for stories in progress.
+- When every unfinished story in the sprint is stuck on you, it stops everything and notifies you once.
+- When the sprint is complete and the next one is not yet approved, development stops. Only the drafting of specs continues. It does not expand the scope on its own.
+- When a PR falls behind main, it updates the branch. When there is a conflict, it dispatches a conflict-resolution task.
+- When main turns red, it stops dispatching and dispatches only one repair task.
+- When a harness runs out of quota, it switches to the fallback. When all are exhausted, it waits.
+- When all gates pass, it enables auto-merge, but only for the tiers listed in `auto_merge_tiers` in `policy/conductor.toml`.
+
+### Fuses
+
+- **Kill switch**: set the repo variable `CONDUCTOR_PAUSED` to `true`, and from the next run on all dispatching stops.
+- Limits: the number of stories in progress at once, the number of PRs opened per day, the number of retries of the same stage, the number of fix and review rounds, the number of triage sessions. Beyond a limit it escalates to you. It does not retry without end.
+
+### Actions budget
+
+GitHub measures the allowance in money: $18 a month on the Team plan. A standard Linux runner costs $0.006 per minute (about 3,000 minutes), a 1-core Linux runner costs $0.002 per minute, and self-hosted runners are not billed. **Each job's time is always rounded up to a whole minute**, so a job that runs for 5 seconds also counts as one minute. This rule shapes the design below.
+
+- The test suite runs only as many times as necessary: once on head, plus, for a story branch, once on base with the test files overlaid. Both happen in the same job.
+- A draft PR runs only lint. The full gates are left until the implementation is complete: about three times per story rather than once per push.
+- An agent pushes only once, at the end of each stage.
+- Light jobs that do not run the PR's code (`spec-verify`, `risk-gate`, conductor, evidence, brief) can use a 1-core runner instead, set with the repo variable `LIGHT_RUNNER`.
+- The conductor's heartbeat on Actions is once every four hours. When you are at the computer, it does not run on Actions at all.
+
+| | First version | Now |
 |---|---|---|
-| Claude Code 雲端 session | Conductor 呼叫 scheduled task 的 API trigger | 否 |
-| Codex cloud | Conductor 在 PR 或 issue 上留 `@codex` | 否 |
-| Claude review | `agent-review` workflow job | 否 |
-| VM 內的 self-hosted runner | Conductor 啟動 `agent-job` workflow，runner 上線時領取 | 是 |
+| Each full gate run | about 5T + 7 minutes | about 2T + 4 minutes, plus about 3 light jobs |
+| Full gate runs per story | about 8 | about 3 |
+| Per story (T=3) | about 215 minutes | about 55 minutes equivalent |
+| Fixed overhead per month | about 750 minutes | about 70 minutes equivalent, lower when the conductor runs locally |
+| Stories supportable per month (T=3 / T=10) | about 10 / 4 | about 50 / 30 |
 
-前三者是主力。第四個是補充產能與備援，Ollama 的任務只能走它。哪條雲端路徑實際可行，要由 spike 確認；不可行的在 `policy/roles.toml` 改成 `via = "workflow"`。
+T is the number of minutes one run of the test suite takes. "Equivalent" means 1-core runner minutes converted by unit price. **These are all estimates and have not yet been measured.** The spike in the runbook asks you to record the actual numbers.
 
-## 7. 你的日常
+**Overflow to self-hosted.** `agentctl budget` estimates the month's usage from the Actions job records (it runs in both the daily brief and the conductor's scheduled runs). When usage reaches 85% of the allowance, it points the repo variable `CI_RUNNER` at the runner inside the VM on your Mac, and changes it back when a new month begins. The threshold, the unit prices and the allowance are all in `policy/conductor.toml`.
 
-你做四件事：
+Only `ci` and `security` move over, because they are the heavy jobs that run the PR's code. The jobs that judge always stay on GitHub-hosted runners: a self-hosted runner is not rebuilt between jobs, and a machine that PR code has touched cannot be used to judge that same code. If the Mac is closed during overflow, these two checks queue, and the conductor treats them as in progress and waits.
 
-1. 在 roadmap 加一行，或跟 PO 說一句話。
-2. 核准或回覆 spec PR。
-3. 核准 sprint PR。
-4. 打 release tag。
+### Where agents run
 
-你看兩個地方：
+| Location | How it is started | Does the laptop need to be open |
+|---|---|---|
+| Claude Code cloud session | The conductor calls a scheduled task's API trigger | No |
+| Codex cloud | The conductor leaves an `@codex` comment on the PR or issue | No |
+| Claude review | The `agent-review` workflow job | No |
+| Self-hosted runner inside the VM | The conductor starts the `agent-job` workflow, and the runner picks it up when it comes online | Yes |
 
-- **Director's brief**：一個固定的 issue，每天更新。內容是 sprint 進度、等你決定的事、被卡住的項目、新合併的項目。每週一多一段稽核：各分級的合併數、revert 數、升級次數，以及隨機抽出的幾個未經人類合併的 PR 供你抽查。數字來自 GitHub，不來自 agent 的自述。
-- **GitHub 的通知**：要你 review 的 PR 與 assign 給你的 issue，就是你的決策佇列。
+The first three are the main workforce. The fourth is extra capacity and a backup, and Ollama tasks can only go through it. Which cloud path actually works has to be confirmed by the spike. For one that does not, change it to `via = "workflow"` in `policy/roles.toml`.
 
-## 8. 分階段開啟自動合併
+## 7. Your day to day
 
-新專案的測試還不足以當作合併的依據，所以 `auto_merge_tiers` 預設是空的（shadow mode）：所有 gate 照常計算與回報，但由你按 merge，conductor 只通知你「這個可以合併了」。
+You do four things:
 
-觀察一段時間，確認 gate 的結論與你自己的判斷一致之後，先開 `T0`，再開 `T1`。T2 永遠需要人類核准。
+1. Add a line to the roadmap, or say one sentence to the PO.
+2. Approve or answer spec PRs.
+3. Approve sprint PRs.
+4. Push release tags.
 
-自動合併的可信度上限是測試的品質。這是分階段的理由。
+You look at two places:
 
-## 9. 已驗證與未驗證
+- **Director's brief**: one fixed issue, updated every day. It contains sprint progress, things waiting for your decision, items that are stuck, newly merged items, and the estimate of the month's Actions usage along with where the conductor is currently running. Every Monday it has an extra audit section: the number of merges per tier, the number of reverts, the number of escalations, and a few randomly drawn PRs that were merged without a human, for you to spot-check. The numbers come from GitHub, not from what agents say about themselves.
+- **GitHub notifications**: PRs that need your review and issues assigned to you are your decision queue.
 
-**已在開發時驗證：**
+## 8. Turning on auto-merge in stages
 
-- `agentctl` 的風險分級、spec 檢查、traceability、red-green 判定、conductor 排程邏輯，共 67 個單元測試。
-- Red-green 在一個真實的 git repo 上端對端執行：空測試被擋下，改成真的測試後通過。
-- Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、留 marker、單一動作失敗不影響其他動作。
-- Workflow 通過 actionlint，shell script 通過 shellcheck，指令攔截 hook 有測試。
+A new project's tests are not yet good enough to serve as the basis for merging, so `auto_merge_tiers` is empty by default (shadow mode): every gate is computed and reported as usual, but you press merge, and the conductor only notifies you that "this one can be merged".
 
-**尚未驗證，需要在你的帳號與機器上做（runbook 的 spike 與 red-team checklist）：**
+Observe for a while. Once you have confirmed that the gates' conclusions agree with your own judgement, turn on `T0` first, then `T1`. T2 always needs human approval.
 
-- Conductor 對真實 GitHub API 的行為，特別是 issue 相依關聯的 API 與 check 狀態的讀取。
-- 以 API 觸發 Claude 雲端 scheduled task 的實際介面，以及以 `@codex` 留言啟動任意任務是否可行、對留言者身分有何要求。
-- 雲端 session 能否連到 machine user 的 GitHub 帳號。
-- `anthropics/claude-code-action` 目前的輸入參數；Codex review bot 的帳號名稱與 review 格式。
-- `sandbox/` 下的 Lima 設定與 egress 規則；`sbx` 的指令與行為。
-- `.claude/settings.json` 的 sandbox 與 permission 語法是否符合目前版本。
-- GitHub Team 方案在 private repo 上的功能邊界：ruleset 與 auto-merge 可用，merge queue 與 environment 的 required reviewers 不可用。後者是 release 改用 tag 保護的原因。
+The credibility of auto-merge is capped by the quality of the tests. That is the reason for doing it in stages.
 
-## 10. 已知限制
+## 9. Verified and not yet verified
 
-- 兩位開發者本身被信任。設計防的是 agent 失控與 prompt injection，不防內部人員。
-- VM 內的 worktree 是可寫的，agent 可以毀掉它。已 push 的內容受 GitHub 保護，未 push 的工作可能遺失。
-- VM 內的訂閱登入狀態理論上可被惡意的 repo 內容竊取。Egress allowlist 降低但不消除這個風險。
-- Lima 的 egress 規則以位址過濾，與允許的主機共用位址的其他主機也連得到。
-- 你貼進 PO chat 或 issue 的內容會進入廠商的 context，不在隔離範圍內。
-- `touches` 是預測，會漏判。代價是合併衝突與重工，由 triage 事後修正；不會導致錯誤的程式被合併。
-- 持續運轉的產能受訂閱額度限制。額度用盡時工作會變慢，不會失敗。
-- 雲端觸發依賴兩家仍在演進的功能。退路是 self-hosted runner，但它需要 Mac 開機。
-- 你不在時，等你決定的事會累積。這是 director 模式下唯一由你決定的節奏。
+**Verified during development:**
+
+- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 81 unit tests in total.
+- Red-green was run end to end on a real git repo, split into two steps, collect and judge: an empty test was blocked, and passed after being changed into a real test. When the collect step was not run, the judgement was fail rather than pass.
+- The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving markers, marking a draft ready for review, a single failed action not affecting the others. While the lease is valid the Actions side does not act, and it takes over when the lease expires. When usage reaches the threshold it rewrites `CI_RUNNER`.
+- The workflows pass actionlint, the shell scripts pass shellcheck, and the command-blocking hook has tests.
+
+**Not yet verified, to be done on your accounts and machines (the spike in the runbook and the red-team checklist):**
+
+- The conductor's behaviour against the real GitHub API, in particular the API for issue dependency links and the reading of check status.
+- The actual interface for triggering a Claude cloud scheduled task by API, and whether starting an arbitrary task with an `@codex` comment is feasible and what it requires of the commenter's identity.
+- Whether cloud sessions can connect to the machine user's GitHub account.
+- The current input parameters of `anthropics/claude-code-action`; the account name of the Codex review bot and its review format.
+- The Lima configuration and egress rules under `sandbox/`; the commands and behaviour of `sbx`.
+- Whether the sandbox and permission syntax in `.claude/settings.json` matches the current version.
+- The actual label of the 1-core runner; the permissions needed for `workflow_run` to trigger the conductor and for downloading artifacts across workflows; the Conductor App's permission to write repo variables.
+- How required checks that were skipped on a draft PR behave after it is marked ready for review.
+- The actual gap between the budget estimate and the GitHub bill; whether the runner labels returned by the Actions jobs API are enough to tell the three classes of runner apart.
+- The behaviour of the local conductor (`conductor here`) on a real repo.
+- The feature boundaries of the GitHub Team plan on private repos: rulesets and auto-merge are available, merge queue and required reviewers for environments are not. The latter is why releases use tag protection instead.
+
+## 10. Known limitations
+
+- The two developers themselves are trusted. The design defends against agents going out of control and against prompt injection, not against insiders.
+- The worktree inside the VM is writable, and an agent can destroy it. Pushed content is protected by GitHub; unpushed work may be lost.
+- The subscription login state inside the VM could in theory be stolen by malicious repo content. The egress allowlist reduces this risk but does not remove it.
+- Lima's egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
+- What you paste into the PO chat or an issue enters the vendor's context and is outside the isolation.
+- There is no hard guarantee that the two language versions of a story mean the same thing. If the Chinese you approved and the English the agents implement differ, only the review agent and you yourself can catch it.
+- Test results are produced by the PR's code and can be forged. See section 4.
+- Actions usage is an estimate. It may differ from the bill, so the overflow may come too early or too late.
+- `touches` is a prediction and will miss things. The cost is merge conflicts and rework, corrected afterwards by triage. It does not lead to wrong code being merged.
+- The capacity for continuous operation is limited by subscription quota. When quota runs out, work slows down. It does not fail.
+- Cloud triggering depends on features that both vendors are still evolving. The fallback is the self-hosted runner, but it needs the Mac to be powered on.
+- While you are away, things waiting for your decision accumulate. This is the only pace in director mode that is set by you.

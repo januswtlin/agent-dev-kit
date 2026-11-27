@@ -39,7 +39,7 @@ Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設
 
 - 獨立 kernel 的 VM，只掛載專案的 worktree。
 - 對外連線限於 `sandbox/allowlist.txt`。這同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
-- VM 內只有 agent 的 GitHub token（見 3.2），沒有 SSH key、雲端憑證。
+- VM 內只有 agent 的 GitHub token（見下方「身分與 token」），沒有 SSH key、雲端憑證。
 
 兩種實作：Docker Sandboxes（`sbx`，每個 agent 一個 microVM，以主機名稱過濾連線）與 Lima（`sandbox/vm.sh`，以位址過濾，較寬鬆）。Repo 內附的是 Lima 的腳本，因為它的設定格式穩定、可以完整寫出來；`sbx` 的隔離較嚴，確認其行為後建議改用。兩者都還沒在實機驗證，見第 9 節。
 
@@ -67,7 +67,7 @@ Agent 在這個 repo 裡有兩種角色，護欄對兩者的要求不同。
 
 Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的規則：不讀寫 home、不 force push、不碰雲端 CLI、不自行開 PR 或合併。早期版本把禁止編輯護欄路徑的規則也放在共用設定裡，結果連受你指示的維護工作都被擋住，包括修正這個設定本身。
 
-### 3.2 身分與 token
+### 身分與 token
 
 三種身分，權限分開：
 
@@ -120,9 +120,9 @@ Story 的 PR 以 draft 開啟。Draft 只跑 lint；實作 stage 完成後 condu
 1. **Traceability。** 測試名稱必須帶 TC ID。CI 讀測試執行器輸出的 JUnit XML，確認每個 ID 都有至少一個實際執行且通過的測試。被 skip 的、不存在的、只寫在註解裡的都不算。依據是執行結果，不是搜尋原始碼。
 2. **Red-green。** 把 PR 的測試檔疊到 main 上執行，必須失敗；在 PR 上必須通過。`assert True` 這種空測試在 main 上就會通過，因而被擋下。
 3. **不得消失。** 在 main 上通過的 TC，之後不能不見。Spec 本身受 CODEOWNERS 保護，agent 不能悄悄刪掉一條 TC。
+4. **忠實度稽核。** 審查 agent（不同於寫測試與寫實作的 agent）對每個 TC 逐條判斷：測試的斷言是否真的驗證了描述的行為。這層補的是前三層看不到的情況：測試存在、會紅會綠，但驗的是錯的東西。
 
 前三層由 `spec-verify` 這一個 check 執行。
-4. **忠實度稽核。** 審查 agent（不同於寫測試與寫實作的 agent）對每個 TC 逐條判斷：測試的斷言是否真的驗證了描述的行為。這層補的是前三層看不到的情況：測試存在、會紅會綠，但驗的是錯的東西。
 
 Merge 之後，`evidence` workflow 把「AC → TC → 測試 → 結果」的對照表貼到 story 的 issue 上。你看這張表，不用讀程式。
 
