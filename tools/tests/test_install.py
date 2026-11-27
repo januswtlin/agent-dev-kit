@@ -79,6 +79,17 @@ class InstallTests(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("is not installed", run.stderr)
 
+    def test_a_tag_named_like_the_default_branch_cannot_choose_the_version(self):
+        self.install()
+        proj = self.project(self.sha)
+        git("checkout", "-q", "-b", "story/001-x", cwd=proj)
+        (proj / "agentdev.toml").write_text(f'[kit]\nversion = "{"2" * 40}"\n')
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "agent", cwd=proj)
+        git("tag", "origin/main", cwd=proj)
+        git("tag", "origin/HEAD", cwd=proj)
+        run = self.run_launcher(proj, "repo-name", "https://github.com/o/r")
+        self.assertEqual((run.returncode, run.stdout.strip()), (0, "o/r"), run.stderr)
+
     def test_a_pin_that_is_not_a_full_sha_is_refused(self):
         self.install()
         run = self.run_launcher(self.project("main"), "repo-name", "x")

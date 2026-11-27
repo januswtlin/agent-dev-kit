@@ -18,20 +18,27 @@ def check(root: str | Path, repository: str, version: str) -> list[str]:
     problems: list[str] = []
     if not SHA.match(version or ""):
         return [f"[kit] version in agentdev.toml must be a full 40-character commit SHA, not {version!r}"]
-    uses = re.compile(rf"uses:\s*{re.escape(repository)}/\.github/workflows/[\w.-]+\.ya?ml@(\S+)", re.IGNORECASE)
+    # Any reusable workflow from another repository: the kit is the only one expected.
+    uses = re.compile(r"uses:\s*['\"]?([\w.-]+/[\w.-]+)/\.github/workflows/[\w.-]+\.ya?ml@([^'\"\s#]+)")
     given = re.compile(r"kit_version:\s*['\"]?([^'\"\s#]+)")
+    repos = re.compile(r"kit_repository:\s*['\"]?([^'\"\s#]+)")
     for path in sorted(Path(root, ".github/workflows").glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
-        refs = uses.findall(text)
-        if not refs:
+        calls = uses.findall(text)
+        if not calls:
             continue
-        for ref in refs:
+        for repo, ref in calls:
+            if repo.lower() != repository.lower():
+                problems.append(f"{path.name}: calls a reusable workflow of {repo}, not of the kit ({repository})")
             if ref != version:
-                problems.append(f"{path.name}: calls the kit at {ref}, not at the [kit] version {version}")
+                problems.append(f"{path.name}: calls {repo} at {ref}, not at the [kit] version {version}")
         inputs = given.findall(text)
-        if len(inputs) != len(refs):
+        if len(inputs) != len(calls):
             problems.append(f"{path.name}: each call of the kit needs `kit_version: {version}`")
         for value in inputs:
             if value != version:
                 problems.append(f"{path.name}: kit_version is {value}, not the [kit] version {version}")
+        for value in repos.findall(text):
+            if value.lower() != repository.lower():
+                problems.append(f"{path.name}: kit_repository is {value}, not the [kit] repository {repository}")
     return problems

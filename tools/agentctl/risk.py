@@ -8,9 +8,7 @@ T2: needs a human approval.
 from __future__ import annotations
 
 import subprocess
-import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .globs import matches
 
@@ -29,11 +27,6 @@ class Assessment:
 
     def to_dict(self) -> dict:
         return {"tier": self.tier, "reasons": self.reasons}
-
-
-def load_policy(path: str | Path) -> dict:
-    with open(path, "rb") as fh:
-        return tomllib.load(fh)
 
 
 def assess(changes: list[Change], policy: dict, has_story: bool) -> Assessment:

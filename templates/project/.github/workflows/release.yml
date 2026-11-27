@@ -1,7 +1,7 @@
 name: release
 
 # Production deploys happen only from a v* tag, and only humans can create v*
-# tags (the release-tags ruleset). Pushing the tag is the release approval.
+# tags (the `tags` ruleset: only admins touch any tag). Pushing the tag is the release approval.
 #
 # This file belongs to the project, not to the kit: deploying is the project's own
 # business. It is a starting point; the check names below are the kit's required

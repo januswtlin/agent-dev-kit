@@ -38,6 +38,7 @@ from .specs import load_all
 
 MARKER_RE = re.compile(r"<!-- conductor (\{.*?\}) -->", re.DOTALL)
 NOTIFIED_RE = re.compile(r"<!-- conductor-notified ([\w:/.-]+) -->")
+ESCALATED_RE = re.compile(r"<!-- conductor-escalated (\d+) -->")
 BRANCH_PREFIXES = ("story/", "spec/", "sprint/", "chore/")
 SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
 NAME_RE = re.compile(r"^[a-z][a-z-]{1,30}$")
@@ -127,10 +128,16 @@ def parse_quota(raw: str) -> dict[str, float]:
     return quota
 
 
+# The kit's required checks as GitHub reports them: its workflows are reusable,
+# so a job is "<caller job> / <job>". Only these exact names stand for them; any
+# other check keeps its own name and cannot overwrite one of them.
+REQUIRED_CHECKS = {"ci / ci": "ci", "ci / spec-verify": "spec-verify", "security / security": "security",
+                   "risk-gate / risk-gate": "risk-gate"}
+
+
 def check_name(item: dict) -> str:
-    """A check's name without its caller: the kit's workflows are reusable, and
-    GitHub reports their jobs as "<caller job> / <job>" ("ci / spec-verify")."""
-    return (item.get("name") or item.get("context") or "").rsplit(" / ", 1)[-1]
+    name = item.get("name") or item.get("context") or ""
+    return REQUIRED_CHECKS.get(name, name)
 
 
 ISSUE_FIELDS = "number,labels,comments"
@@ -330,7 +337,9 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
     for sid, issue in issues.items():
         spec = specs.get(sid)
         labels = {label["name"] for label in issue.get("labels", [])}
-        markers = read_markers(_comments_by(issue, authors))
+        bodies = _comments_by(issue, authors)
+        markers = read_markers(bodies)
+        escalated_at = max((float(t) for body in bodies for t in ESCALATED_RE.findall(body)), default=None)
         last = markers[-1] if markers else None
         impl = [m for m in markers if m.get("stage") == "impl"]
 
@@ -373,7 +382,8 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
             fix_rounds=sum(1 for m in markers if m.get("stage") == "fix" and int(m.get("attempt", 1)) == 1),
             triage_count=sum(1 for m in markers if m.get("stage") == "triage"),
             triage_verdict="retry" if "triage:retry" in labels else None,
-            dispatches=len(markers),
+            dispatches=sum(1 for m in markers if escalated_at is None or float(m["at"]) > escalated_at),
+            escalated_at=escalated_at,
         )
 
     # Stories merged in an earlier sprint satisfy a dependency without being in this one.
@@ -670,7 +680,7 @@ def _execute_one(action: Action, context: dict, roles: dict) -> None:
         # but changing them would still be confusing.
         gh("label", "create", "needs-human", "--force", check=False)
         gh("issue", "edit", issue, "--add-label", "needs-human")
-        marker = "" if action.story else "<!-- conductor-notified sprint-escalated -->\n"
+        marker = f"<!-- conductor-escalated {int(time.time())} -->\n" if action.story else "<!-- conductor-notified sprint-escalated -->\n"
         gh("issue", "comment", issue, "--body", f"{marker}{mention} Needs a human decision: {action.reason}")
     elif action.kind == "notify":
         key = action.key or (f"ready-to-merge/{action.story}" if action.story else (

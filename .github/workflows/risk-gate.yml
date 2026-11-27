@@ -66,15 +66,18 @@ jobs:
         id: tier
         working-directory: head
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          git worktree add --detach "$RUNNER_TEMP/base" "origin/$BASE_REF"
+          # The base by commit id, never by a short name: git looks origin/main up among
+          # tags first, and an agent can push a tag of any name.
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no base commit"; exit 1; }
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
           # The working directory is the pull request's tree. Every Python below runs
           # with -I so that tree cannot supply a module (agentctl.py, json.py,
           # tomllib.py) in place of the real one.
           AGENTCTL_TRUSTED_ROOT="$RUNNER_TEMP/base" \
-            python3 -I "$RUNNER_TEMP/kit/tools/run.py" risk --base "origin/$BASE_REF" --branch "$HEAD_REF" | tee "$RUNNER_TEMP/risk.json"
+            python3 -I "$RUNNER_TEMP/kit/tools/run.py" risk --base "$BASE_SHA" --branch "$HEAD_REF" | tee "$RUNNER_TEMP/risk.json"
           tier="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["tier"])' "$RUNNER_TEMP/risk.json")"
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
           {

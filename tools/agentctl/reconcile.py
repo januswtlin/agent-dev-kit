@@ -62,7 +62,8 @@ class Story:
     fix_rounds: int = 0
     triage_count: int = 0
     triage_verdict: str | None = None  # "retry" once a triage session asked for another attempt
-    dispatches: int = 0  # sessions dispatched for this story so far, every stage counted
+    dispatches: int = 0  # sessions dispatched since the last escalation (or ever), every stage counted
+    escalated_at: float | None = None  # when the conductor last escalated it to a person
 
     @property
     def done(self) -> bool:
@@ -282,14 +283,6 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
 
     waiting = 0  # stories legitimately waiting on a running session, a check or quota
 
-    def dispatch(story: Story, stage: str, attempt: int, reason: str = "") -> None:
-        nonlocal waiting
-        harness = pick_harness(story, stage, roles, state)
-        if harness is None:
-            waiting += 1  # quota exhausted on every configured harness; try again next run
-            return
-        actions.append(Action("dispatch", story=story.id, stage=stage, harness=harness, attempt=attempt, reason=reason))
-
     dependents = {sid: sorted(o.id for o in stories.values() if sid in o.deps and not o.done) for sid in stories}
 
     def escalate(story: Story, why: str) -> None:
@@ -298,6 +291,18 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         waiting_for_it = dependents.get(story.id) or []
         tail = f" Waiting for it: {', '.join(waiting_for_it)}." if waiting_for_it else ""
         actions.append(Action("escalate", story=story.id, reason=why + tail))
+
+    def dispatch(story: Story, stage: str, attempt: int, reason: str = "") -> None:
+        nonlocal waiting
+        # Counted since the last escalation: once a person has cleared it, it may go on.
+        if story.dispatches >= policy["max_dispatches_per_story"]:
+            escalate(story, f"{story.dispatches} sessions without finishing (limit {policy['max_dispatches_per_story']})")
+            return
+        harness = pick_harness(story, stage, roles, state)
+        if harness is None:
+            waiting += 1  # quota exhausted on every configured harness; try again next run
+            return
+        actions.append(Action("dispatch", story=story.id, stage=stage, harness=harness, attempt=attempt, reason=reason))
 
     def retry_or_give_up(story: Story, why: str) -> None:
         d = story.last_dispatch
@@ -323,7 +328,13 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         if (story.done or not story.started or "needs-human" in story.labels or "blocked" in story.labels
                 or not all(satisfied(dep) for dep in story.deps)):
             continue
-        if _human_blocked(story):
+        if _in_flight(story):
+            # Its session runs whatever the limit says: it is admitted, holds what it
+            # touches and takes a slot, so its timeout and retry are always looked at.
+            admitted.add(story.id)
+            slots += 1
+            held.update(story.touches)
+        elif _human_blocked(story):
             admitted.add(story.id)  # waits for a person; holds its claim but no slot
             held.update(story.touches)
         elif slots < policy["wip_limit"] and not (held & set(story.touches)):
@@ -368,14 +379,13 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             if "needs-human" in story.labels or "blocked" in story.labels:
                 continue
 
-        if story.dispatches >= policy["max_dispatches_per_story"] and not _in_flight(story):
-            escalate(story, f"{story.dispatches} sessions without finishing (limit {policy['max_dispatches_per_story']})")
-            continue
-
         if not all(satisfied(dep) for dep in story.deps):
             # A dependency was added after it started (triage): parked until that story
             # merges. Parked too long means the split was wrong, which a person decides.
-            if d is not None and state.now - d.at > policy["max_parked_hours"] * 3600:
+            # Measured from the last thing that happened to it, an escalation included,
+            # so that a person who clears it gets another full period.
+            since = max(d.at if d else 0.0, story.escalated_at or 0.0)
+            if since and state.now - since > policy["max_parked_hours"] * 3600:
                 escalate(story, f"waiting for {', '.join(sorted(dep for dep in story.deps if not satisfied(dep)))} "
                                 f"for over {policy['max_parked_hours']} hours")
             continue
@@ -470,7 +480,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
     claimed: set[str] = set()
     for s in active:
         claimed.update(s.touches)
-    dependents = {sid: sum(1 for o in stories.values() if sid in o.deps) for sid in stories}
+    dependent_count = {sid: sum(1 for o in stories.values() if sid in o.deps) for sid in stories}
 
     candidates = [
         s for s in stories.values()
@@ -478,7 +488,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         and "needs-human" not in s.labels and "blocked" not in s.labels
         and all(satisfied(d) for d in s.deps)
     ]
-    candidates.sort(key=lambda s: (s.priority, -dependents[s.id], s.id))
+    candidates.sort(key=lambda s: (s.priority, -dependent_count[s.id], s.id))
     for story in candidates:
         if wip >= policy["wip_limit"] or budget <= 0:
             break

@@ -338,6 +338,25 @@ class ExitsToAPerson(unittest.TestCase):
         self.assertEqual(kinds(run(state(idle))), [("escalate", "001", "")])
         self.assertEqual(kinds(run(state(idle), max_dispatches_per_story=16)), [("dispatch", "001", "impl")])
 
+    def test_the_session_limit_only_stops_a_new_session(self):
+        # The fifteenth session was a review that passed: nothing more is needed, so
+        # the story is not escalated; it goes on to merge.
+        checks = dict(GREEN, **{"agent-review": "success"})
+        ready = story("001", dispatches=15, stage_done=DONE, pr=PR(1, checks=checks, tier="T0", head_sha="b"),
+                      last_dispatch=Dispatch("review", NOW - 60, sha="a"))
+        self.assertEqual(kinds(run(state(ready), auto_merge_tiers=["T0"])), [("enable-auto-merge", "001", "")])
+
+    def test_a_person_who_clears_a_parked_story_gets_another_full_period(self):
+        cleared = self.parked(100)
+        cleared.escalated_at = NOW - 3600
+        dep = story("002", last_dispatch=Dispatch("impl", NOW - 60))
+        self.assertEqual([a for a in run(state(cleared, dep)) if a.kind == "escalate"], [])
+
+    def test_a_dead_session_is_retried_even_when_another_running_one_touches_the_same_thing(self):
+        alive = story("001", stage_done={"design"}, touches=["shared"], last_dispatch=Dispatch("tests", NOW - 60))
+        dead = story("002", stage_done={"design"}, touches=["shared"], last_dispatch=Dispatch("tests", NOW - 99999))
+        self.assertIn(("dispatch", "002", "tests"), kinds(run(state(alive, dead))))
+
     def test_an_escalation_names_the_stories_waiting_for_it(self):
         failing = story("001", stage_done=DONE, fix_rounds=3,
                         pr=PR(1, checks={"ci": "failure", "security": "success", "spec-verify": "success"}))

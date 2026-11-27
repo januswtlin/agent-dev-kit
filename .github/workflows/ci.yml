@@ -72,7 +72,7 @@ jobs:
           [ -z "$cmd" ] || bash -c "$cmd"
       - name: Both language versions of a story change together
         if: github.event_name == 'pull_request'
-        run: agentctl spec-lint --base "origin/$BASE_REF"
+        run: agentctl spec-lint --base "refs/remotes/origin/$BASE_REF"
 
       - name: Tests on head
         id: tests
@@ -84,7 +84,7 @@ jobs:
         run: agentctl collect-junit --out "$RUNNER_TEMP/results/junit"
       - name: Tests on base with this branch's test files (story branches)
         if: env.FULL == 'true' && github.event_name == 'pull_request'
-        run: agentctl redgreen-collect --base "origin/$BASE_REF" --out "$RUNNER_TEMP/results/base-overlay" --branch "$HEAD_REF"
+        run: agentctl redgreen-collect --base "refs/remotes/origin/$BASE_REF" --out "$RUNNER_TEMP/results/base-overlay" --branch "$HEAD_REF"
       - name: Always leave a result file, so a missing artifact means a broken run
         if: env.FULL == 'true'
         run: |

@@ -35,12 +35,24 @@ permissions:
   statuses: write
 
 jobs:
+  # The review the conductor asks for. Secrets are passed only here: this trigger
+  # runs the workflow file of the branch it is started on, and the review token
+  # is a secret of the `conductor` environment, which only the default branch may use.
   agent-review:
+    if: github.event_name == 'workflow_dispatch'
     uses: __KIT_REPOSITORY__/.github/workflows/agent-review.yml@__KIT_VERSION__
     secrets: inherit
     with:
       kit_version: __KIT_VERSION__
-      pr: ${{ inputs.pr || '' }}
-      story: ${{ inputs.story || '' }}
-      developer: ${{ inputs.developer || '' }}
-      sha: ${{ inputs.sha || '' }}
+      pr: ${{ inputs.pr }}
+      story: ${{ inputs.story }}
+      developer: ${{ inputs.developer }}
+      sha: ${{ inputs.sha }}
+
+  # A review bot's verdict turned into the status. For a review event GitHub runs
+  # the pull request's copy of this file, so it gets no secrets at all.
+  review-bot:
+    if: github.event_name == 'pull_request_review'
+    uses: __KIT_REPOSITORY__/.github/workflows/agent-review.yml@__KIT_VERSION__
+    with:
+      kit_version: __KIT_VERSION__

@@ -2,13 +2,17 @@
 # Create or update a project's rulesets from the kit's templates/rulesets/*.json.
 # Run by a repository admin (a human), never by an agent, from inside the project:
 #
-#   agentctl rulesets 2 [owner/repo]    layer 2: main, main-merge, release-tags
+#   agentctl rulesets 2 [owner/repo]    layer 2: main, main-merge, tags
 #   agentctl rulesets 3 [owner/repo]    layer 3: main-checks (the required checks)
 #
 # Layer 3's ruleset requires the checks the caller workflows produce, so apply it
 # only once those workflows are on the default branch and have run.
 #
 # Private repositories need the GitHub Team plan for rulesets.
+#
+# `tags` lets only repository admins create, move or delete ANY tag: a v* tag is
+# a release approval, and a tag of another name could pass for a branch where a
+# short ref name is resolved (git looks origin/main up among tags first).
 #
 # For layer 2, CONDUCTOR_APP_ID must be set: the `main-merge` ruleset lets only
 # repository admins and the Conductor App update the default branch, so that an
@@ -19,7 +23,7 @@ set -euo pipefail
 
 layer="${1:-}"
 case "$layer" in
-  2) names="main main-merge release-tags" ;;
+  2) names="main main-merge tags" ;;
   3) names="main-checks" ;;
   *) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 1 ;;
 esac

@@ -72,6 +72,8 @@ def init(root: Path, people: list[str], version: str = "", dry_run: bool = False
             shutil.copymode(source, dest)
         else:
             shutil.copy2(source, dest)
+        # The installed kit is read-only; the project's copy must not be.
+        dest.chmod(dest.stat().st_mode | 0o200)
     codeowners = root / ".github" / "CODEOWNERS"
     if codeowners.exists():
         kept.append(".github/CODEOWNERS")

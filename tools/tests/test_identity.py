@@ -211,6 +211,10 @@ class DispatchTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
+    def test_an_escalation_leaves_a_marker_the_next_pass_reads(self):
+        body = "<!-- conductor-escalated 1700000000 -->\n@alice Needs a human decision: x"
+        self.assertEqual(github.ESCALATED_RE.findall(body), ["1700000000"])
+
     def test_a_malformed_quota_is_ignored_not_fatal(self):
         self.assertEqual(github.parse_quota(""), {})
         self.assertEqual(github.parse_quota("not json"), {})
@@ -219,8 +223,10 @@ class ObservationTests(unittest.TestCase):
 
     def test_check_names_from_reusable_workflows_drop_the_caller(self):
         self.assertEqual(github.check_name({"name": "ci / spec-verify"}), "spec-verify")
-        self.assertEqual(github.check_name({"name": "risk-gate"}), "risk-gate")
+        self.assertEqual(github.check_name({"name": "risk-gate / risk-gate"}), "risk-gate")
         self.assertEqual(github.check_name({"context": "agent-review"}), "agent-review")
+        # Another workflow's job named ci does not stand for the required check.
+        self.assertEqual(github.check_name({"name": "lint / ci"}), "lint / ci")
 
     def test_only_trusted_authors_markers_count(self):
         issue = {"comments": [

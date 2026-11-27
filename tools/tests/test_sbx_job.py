@@ -31,8 +31,19 @@ class SbxJobTests(unittest.TestCase):
         (bin_dir / "sbx").chmod(0o755)
         self.project = self.tmp / "dev" / "proj"
         self.project.mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
-        subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
+        git = lambda *a: subprocess.run(["git", "-C", str(self.project), *a], check=True, capture_output=True)  # noqa: E731
+        git("init", "-q", "-b", "main")
+        (self.project / "agentdev.toml").write_text('[risk.t2]\nguardrails = ["ours/**"]\n')
+        git("-c", "user.name=t", "-c", "user.email=t@t", "add", ".")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "main")
+        # What the default branch says, as last fetched; and a tag that tries to pass for it.
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+        git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        git("checkout", "-q", "-b", "story/012-x")
+        (self.project / "agentdev.toml").write_text('[risk.t2]\nguardrails = []\n')
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "agent")
+        git("tag", "origin/main")
+        git("remote", "add", "origin", "https://github.com/o/r.git")
         data = self.tmp / "data"
         helper = data / "agent-dev" / "o-r" / "github-token-write"
         helper.parent.mkdir(parents=True)
@@ -67,6 +78,22 @@ class SbxJobTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(calls[calls.index("run"):], ["run", "rm"])
         self.assertFalse(list((self.tmp / "state").rglob("*.created")))
+
+    def test_the_deny_rules_come_from_the_default_branch_not_a_tag_or_the_tree(self):
+        copied = self.tmp / "copied.json"
+        fake = (self.tmp / "bin/sbx").read_text().replace(
+            "[ \"$1\" = \"${SBX_FAIL:-}\" ] && exit 1",
+            "[ \"$1\" = cp ] && cp \"$2\" \"$SBX_COPY\"\n[ \"$1\" = \"${SBX_FAIL:-}\" ] && exit 1")
+        (self.tmp / "bin/sbx").write_text(fake)
+        code, _ = self.job(SBX_COPY=str(copied))
+        self.assertEqual(code, 0)
+        self.assertIn("Edit(ours/**)", copied.read_text())
+
+    def test_without_settings_on_the_default_branch_the_job_does_not_start(self):
+        subprocess.run(["git", "-C", str(self.project), "update-ref", "-d", "refs/remotes/origin/main"], check=True)
+        code, calls = self.job()
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("run", calls)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${arch}.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" gitleaks
           if [ -n "$BASE_REF" ]; then
-            "$RUNNER_TEMP/gitleaks" git --redact --log-opts="origin/${BASE_REF}..HEAD" .
+            "$RUNNER_TEMP/gitleaks" git --redact --log-opts="refs/remotes/origin/${BASE_REF}..HEAD" .
           else
             "$RUNNER_TEMP/gitleaks" git --redact --log-opts="-1" .
           fi
@@ -48,7 +48,7 @@ jobs:
       - name: Is there code to analyse?
         id: code
         run: |
-          if [ -n "$BASE_REF" ]; then range="origin/${BASE_REF}...HEAD"; else range="HEAD~1..HEAD"; fi
+          if [ -n "$BASE_REF" ]; then range="refs/remotes/origin/${BASE_REF}...HEAD"; else range="HEAD~1..HEAD"; fi
           if git diff --name-only "$range" | grep -Evq '(^docs/|\.md$|\.toml$|\.txt$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi

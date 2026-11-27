@@ -38,6 +38,17 @@ class InitTests(unittest.TestCase):
         self.assertEqual((self.root / ".github/CODEOWNERS").read_text(), owners.codeowners(cfg))
         self.assertTrue((self.root / ".claude/hooks/guard.sh").stat().st_mode & 0o100)
 
+    def test_files_from_a_read_only_kit_are_writable_in_the_project(self):
+        import os
+        template = init.TEMPLATE / "agentdev.toml"
+        mode = template.stat().st_mode
+        os.chmod(template, mode & ~0o222)
+        try:
+            init.init(self.root, ["alice"], SHA)
+        finally:
+            os.chmod(template, mode)
+        self.assertTrue((self.root / "agentdev.toml").stat().st_mode & 0o200)
+
     def test_existing_files_are_kept_never_overwritten(self):
         (self.root / "AGENTS.md").write_text("ours\n")
         created, kept = init.init(self.root, ["alice"], SHA)
@@ -79,6 +90,8 @@ class PinTests(unittest.TestCase):
         self.assertTrue(pins.check(self.write(good.replace(f"kit_version: {SHA}", "kit_version: main")), "o/kit", SHA))
         self.assertTrue(pins.check(self.write(good.replace(f"      kit_version: {SHA}\n", "")), "o/kit", SHA))
         self.assertTrue(pins.check(self.write(good), "o/kit", "main"))
+        self.assertTrue(pins.check(self.write(good.replace("o/kit/", "fork/kit/")), "o/kit", SHA))
+        self.assertTrue(pins.check(self.write(good + "      kit_repository: fork/kit\n"), "o/kit", SHA))
 
 
 if __name__ == "__main__":

@@ -65,7 +65,10 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 
 def fresh_main_checkout(repo: Path, branch: str = "main") -> Path:
-    """A detached worktree of origin/<branch>, refreshed on every call.
+    """A detached worktree of refs/remotes/origin/<branch>, refreshed on every call.
+
+    The full ref name matters: git looks a short name such as origin/main up among
+    tags first, and an agent can push a tag of any name.
 
     The conductor must read the approved sprint, specs and configuration from the default
     branch, never from whatever happens to be checked out in the working directory.
@@ -75,8 +78,8 @@ def fresh_main_checkout(repo: Path, branch: str = "main") -> Path:
     worktree = Path(common) / "agentctl-main"
     subprocess.run(["git", "fetch", "--quiet", "origin", branch], check=True, cwd=repo)
     if not (worktree / ".git").exists():
-        subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(worktree), f"origin/{branch}"],
+        subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(worktree), f"refs/remotes/origin/{branch}"],
                        check=True, cwd=repo)
     else:
-        subprocess.run(["git", "checkout", "--quiet", "--detach", f"origin/{branch}"], check=True, cwd=worktree)
+        subprocess.run(["git", "checkout", "--quiet", "--detach", f"refs/remotes/origin/{branch}"], check=True, cwd=worktree)
     return worktree

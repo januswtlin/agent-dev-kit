@@ -79,8 +79,11 @@ agentctl() { python3 -I "$kit/tools/run.py" "$@"; }
 agentctl_trusted() {
   local cfg default rc=0
   cfg="$(mktemp -d)"
-  default="$(git -C "$project" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
-  git -C "$project" show "$default:agentdev.toml" > "$cfg/agentdev.toml" 2>/dev/null || : > "$cfg/agentdev.toml"
+  # Full ref names only: git looks a short name such as origin/main up among tags
+  # first, and an agent can push a tag of any name.
+  default="$(git -C "$project" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || echo refs/remotes/origin/main)"
+  git -C "$project" show "$default:agentdev.toml" > "$cfg/agentdev.toml" 2>/dev/null \
+    || { rm -rf "$cfg"; die "$default has no agentdev.toml; the sandbox's rules come from there."; }
   (cd "$project" && AGENTCTL_TRUSTED_ROOT="$cfg" agentctl "$@") || rc=$?
   rm -rf "$cfg"
   return "$rc"
@@ -271,18 +274,24 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     # here and is shown. A sandbox that failed a check is removed: nobody is there
     # to inspect it. But only if this invocation created it, which the record says.
     record="$log_dir/$story-$stage-$harness-$stamp.created"
+    # However this ends, an interrupt or a termination included, the sandbox is
+    # removed if, and only if, this invocation created it.
+    # shellcheck disable=SC2329  # run by the EXIT trap
+    cleanup() {
+      if [ -e "$record" ]; then
+        sbx rm --force "$name" >> "$log" 2>&1 || echo "WARNING: could not remove sandbox $name" >> "$log"
+        rm -f "$record"
+      fi
+    }
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     rc=0
     AGENT_PROJECT_DIR="$project" bash "${BASH_SOURCE[0]}" _create "$name" "$harness" "$stage" "$record" > "$log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then
       cat "$log" >&2
-      if [ -e "$record" ]; then sbx rm --force "$name" >> "$log" 2>&1 || true; fi
-      rm -f "$record"
       exit 1
     fi
-    rm -f "$record"
-    # From here on the sandbox is this invocation's: remove it however this ends,
-    # an interrupt included.
-    trap 'sbx rm --force "$name" >> "$log" 2>&1 || echo "WARNING: could not remove sandbox $name" >> "$log"' EXIT
     case "$harness" in
       claude) set -- -p "$prompt" ;;
       codex)  set -- exec "$prompt" ;;

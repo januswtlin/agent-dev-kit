@@ -492,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("risk", help="compute the risk tier of a change set")
-    p.add_argument("--base", default="origin/main")
+    p.add_argument("--base", default="refs/remotes/origin/main")
     p.add_argument("--head", default="HEAD")
     p.add_argument("--branch", help="branch name (defaults to the current branch)")
     p.set_defaults(func=cmd_risk)
@@ -505,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_docs_lint)
 
     p = sub.add_parser("redgreen-collect", help="run the story's tests on the base commit and keep the JUnit files")
-    p.add_argument("--base", default="origin/main")
+    p.add_argument("--base", default="refs/remotes/origin/main")
     p.add_argument("--out", required=True)
     p.add_argument("--story")
     p.add_argument("--branch")
@@ -552,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_trace)
 
     p = sub.add_parser("redgreen", help="check that the story's tests fail on base and pass on head")
-    p.add_argument("--base", default="origin/main")
+    p.add_argument("--base", default="refs/remotes/origin/main")
     p.add_argument("--junit", nargs="+", help="JUnit XML from head (defaults to [tests] junit_glob)")
     p.add_argument("--story")
     p.add_argument("--branch")

@@ -15,7 +15,9 @@ version="${AGENTDEV_KIT_VERSION:-}"
 if [ -z "$version" ]; then
   root="$(git rev-parse --show-toplevel 2>/dev/null)" \
     || die "not inside a git repository. Run it in a project, or set AGENTDEV_KIT_VERSION=<sha>."
-  default="$(git -C "$root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
+  # Full ref names only: git looks a short name such as origin/main up among tags
+  # first, and an agent can push a tag of any name.
+  default="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || echo refs/remotes/origin/main)"
   toml="$(git -C "$root" show "$default:agentdev.toml" 2>/dev/null)" \
     || die "$default has no agentdev.toml. Set AGENTDEV_KIT_VERSION=<sha> until it does."
   version="$(printf '%s' "$toml" | python3 -I -c 'import sys, tomllib
