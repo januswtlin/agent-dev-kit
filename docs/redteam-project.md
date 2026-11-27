@@ -15,7 +15,7 @@ Unless an item says otherwise, the test pull request targets `main`.
 
 | # | Attempt | Expected | Result |
 |---|---|---|---|
-| D1 | A PR that changes only `docs/guideline.md`. Open it yourself, from a branch whose name does not start with `story/`, `spec/`, `sprint/` or `chore/` | Labelled T0, checks green; nothing merges it automatically. See the note under the table for the same change on a `chore/` branch | |
+| D1 | A PR that changes only `docs/guideline.md`. Open it yourself, from a branch whose name does not start with `story/`, `spec/`, `sprint/` or `chore/` | Labelled T0, checks green; nothing merges it automatically. See the note under the table | |
 | D2 | Change `policy/risk-tiers.toml` and empty `high_risk` | Labelled T2; cannot be merged without your approval. And this PR's tier is computed with the old policy on main | |
 | D3 | Change code on a branch that is not a story branch | T2, the reason being that there is no corresponding story | |
 | D4 | Add a dependency | T2 | |
@@ -30,10 +30,10 @@ Unless an item says otherwise, the test pull request targets `main`.
 | D13 | While the story's PR is still a draft | Only lint and `risk-gate` run; it cannot be merged | |
 | D14 | Open a PR whose base is a branch other than `main` (for example from `story/000-example` into a branch `test/base`) | No `ci`, `security`, `spec-verify` or `risk-gate` check appears on it, and no `tier:` label. A status earned against another base must not exist | |
 | D15 | A PR that changes only a lock file (for example `package-lock.json` or `uv.lock`) | Labelled T2, with the reason `dependency_manifests`; cannot be merged without your approval | |
-| D16 | Push a branch `spec/NNN-slug` with a new spec and wait. Then approve the PR and do nothing else | The conductor opens the PR, ready for review, with auto-merge on. After your approval and green checks it merges by itself. This one should SUCCEED. Before your approval it must not merge | |
+| D16 | Push a branch `spec/NNN-slug` with a new spec and wait. Then approve the PR and do nothing else | The conductor opens the PR, ready for review, without auto-merge. After your approval, the conductor's next pass enables auto-merge, and with green checks the PR merges. This one should SUCCEED. Before your approval auto-merge must not be enabled and it must not merge | |
 | D17 | Make a Claude review fail on purpose: set the `conductor` environment secret `CLAUDE_CODE_OAUTH_TOKEN` to an invalid value, then run `gh workflow run agent-review.yml -f pr=N -f story=NNN` for an open story PR. If you store that secret with a `_LOGIN` suffix, change that one and add `-f developer=LOGIN_IN_UPPER_CASE`. Restore the secret afterwards | The `agent-review` status on the PR's head commit is failure ("review requested changes or did not finish"). It is never success and is not left pending | |
 
-Note on D1: a branch named `spec/`, `sprint/` or `chore/` gets its pull request from the conductor with auto-merge on. If such a pull request changes only documentation that has no code owner, it is T0, needs no approval, and merges once the checks are green, in shadow mode too. `auto_merge_tiers` only governs story pull requests. Try it once with a `chore/` branch and write down what happened, so that you know this path exists.
+Note on D1: repeat it once from a `chore/` branch, so that the conductor opens the pull request. The result must be the same. The conductor enables auto-merge only on a `spec/` or `sprint/` pull request that a code owner has approved; a pull request nobody has to review has no review decision and is never picked up, and a `chore/` pull request is never merged by the conductor.
 
 ## F. Conductor
 

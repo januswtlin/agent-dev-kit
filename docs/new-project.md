@@ -132,7 +132,7 @@ The script refuses to run without `CONDUCTOR_APP_ID`. It creates or updates thre
 - `main-merge`: only repo admins and the Conductor App may update the default branch. An agent's token can push branches, and this ruleset is what stops it from merging a pull request even when every check on it is green. The admins and the Conductor App still have to satisfy everything in `main`.
 - `release-tags`: only repo admins may create, move or delete a `v*` tag.
 
-In Settings > General > Pull Requests: turn on Allow auto-merge, allow squash merging only, and turn on Automatically delete head branches. Allow auto-merge is not optional: the conductor enables auto-merge on spec, sprint and chore pull requests when it opens them, and that is the only thing that merges them after you approve.
+In Settings > General > Pull Requests: turn on Allow auto-merge, allow squash merging only, and turn on Automatically delete head branches. Allow auto-merge is not optional: once a code owner has approved a spec or sprint pull request, the conductor enables auto-merge on it at its next pass, and that is what merges it. It does this whatever `auto_merge_tiers` says, because the decision was a person's. It never does it for a `chore/` pull request; a person merges those.
 
 Confirm:
 
@@ -176,14 +176,19 @@ make lint
 git add docs/specs/001-hello docs/sprints/001.toml && git commit -m "Add the spike story and sprint 001" && git push -u origin sprint/001
 ```
 
-2. Wait for the conductor to open the pull request for `sprint/001`. It is opened ready for review, with auto-merge enabled. Do not approve it yet.
-3. Pause the conductor. Otherwise the merge of the sprint file starts a live run at once:
+2. Wait for the conductor to open the pull request for `sprint/001`. It is opened ready for review. Wait until its checks are green.
+3. Pause the conductor. Otherwise the merge of the sprint file starts a live run at once. This also means the conductor will not merge this one pull request for you: a paused conductor does nothing at all, and that includes enabling auto-merge:
 
 ```bash
 gh variable set CONDUCTOR_PAUSED --body true
 ```
 
-4. Approve the pull request. You do not press merge: once the checks are green it merges by itself. The merge triggers conductor runs; while paused each one prints only `halt`.
+4. Approve the pull request, then merge it yourself, this once. The merge triggers conductor runs; while paused each one prints only `halt`:
+
+```bash
+gh pr merge sprint/001 --squash
+```
+
 5. Ask for a dry run. While paused it also prints only `halt (kill switch is on)`, because a paused conductor does not compute a plan. This confirms the kill switch works:
 
 ```bash
@@ -221,7 +226,7 @@ Have Claude and Codex each do the implementation once. If any step gets stuck, n
 | The `reconcile` job fails at the App token step, or is refused the environment | Check that the environment `conductor` exists, that its branch rule allows `main`, and that `CONDUCTOR_APP_PRIVATE_KEY` is a secret of that environment, not a repository secret |
 | A branch was pushed but no pull request appears | Check that `notify` ran for the push and that a `conductor` run followed it. The conductor opens nothing while `CONDUCTOR_PAUSED` is `true`, and no more than `max_prs_per_day` story pull requests a day. Branch names must start with `story/`, `spec/`, `sprint/` or `chore/` |
 | The pull request was opened but the checks did not run | It must be opened by the Conductor App, not with `GITHUB_TOKEN`. Check that the `reconcile` job used the App token. The checks also only run for pull requests into `main` |
-| An approved spec or sprint pull request does not merge | Check that Allow auto-merge is on (section 5), that auto-merge is enabled on the pull request, and that all five checks are green on the commit you approved. A push after your approval invalidates it |
+| An approved spec or sprint pull request does not merge | The conductor enables auto-merge at its next pass after the approval, not at the moment you approve. Check that a `conductor` run followed your review (on Actions it is started by `risk-gate` re-running), that the conductor is not paused, that Allow auto-merge is on (section 5), that the approval came from a code owner, and that all five checks are green on the commit you approved. A push after your approval invalidates it. A `chore/` pull request is never merged by the conductor: merge it yourself |
 | A harness cannot be triggered from the cloud | In `policy/roles.toml`, change it to `via = "sbx"`. Its stages then run in a Docker Sandbox on the developer's Mac and wait until `bin/agentctl conductor here` runs there. This is a T2 change on a `chore/` branch |
 | The agent did not add the `done:*` label | Check whether the agent identity has write access to Issues; strengthen the prompt if necessary |
 | `agent-review` stays pending | For a Claude review, look at the `agent-review` workflow run: the `publish` job sets failure when the review did not finish, so pending means the run never started or could not resolve the pull request. Check that `CLAUDE_CODE_OAUTH_TOKEN` is a secret of the `conductor` environment and check the action's input parameters. For a Codex review, check `REVIEW_BOTS` |
@@ -237,8 +242,8 @@ Run every item in [redteam-project.md](redteam-project.md). If an item does not 
 The spike used sprint 001, so the first real sprint is sprint 002.
 
 1. Add a few lines of requirements to `docs/product/roadmap.md` and merge them through a PR; or discuss them one by one in PO chat.
-2. The PO pushes a `spec/` branch for each story and the conductor opens the pull request. Approve it. Approving is enough: it merges by itself once the checks are green.
+2. The PO pushes a `spec/` branch for each story and the conductor opens the pull request. Approve it. Approving is enough: at its next pass the conductor enables auto-merge, and the pull request merges once the checks are green.
 3. The planner drafts the next sprint when the current one is nearly complete. For the first real sprint you have to ask it by hand: open a Claude Code session and ask it to draft sprint 002 following `prompts/planner.md`.
-4. Approve the sprint pull request. It merges by itself, and the conductor takes over from here.
+4. Approve the sprint pull request. It merges the same way, and the conductor takes over from here.
 
 Automatic merging of story pull requests starts switched off (shadow mode). When and how to turn it on is in [operations.md](operations.md), section 2.

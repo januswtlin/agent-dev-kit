@@ -19,7 +19,7 @@ What `conductor here` needs:
 # The Conductor App (new-project.md, section 3). The key path must be absolute; "~" is not expanded.
 CONDUCTOR_APP_ID=123456
 CONDUCTOR_APP_KEY=/Users/YOU/.config/agent-dev/OWNER-REPO/conductor-app.pem
-# Your GitHub login. A local sandbox is not started for a story that the sprint file gives to someone else.
+# Your GitHub login. This conductor does not dispatch a story that the sprint file gives to someone else.
 DEVELOPER=YOUR_LOGIN
 # Dispatch credentials, the same values as the secrets in new-machine.md, section 3.
 CLAUDE_TRIGGER_URL=https://...
@@ -27,7 +27,7 @@ CLAUDE_TRIGGER_TOKEN=...
 DISPATCH_TOKEN=...
 ```
 
-  `CONDUCTOR_APP_ID`, `CONDUCTOR_APP_KEY` and `DEVELOPER` are required; without them `here`, `away` and `status` all stop with a message. The dispatch credentials are needed for the harnesses you use. As on Actions, a name with a `_LOGIN` suffix (`CLAUDE_TRIGGER_URL_ALICE`) is used for that developer's stories, and the plain name is the fallback for everyone. With several people, give each person's credentials their suffix, or another person's story is sent with yours.
+  `CONDUCTOR_APP_ID`, `CONDUCTOR_APP_KEY` and `DEVELOPER` are required; without them `here`, `away` and `status` all stop with a message. The dispatch credentials are needed for the harnesses you use. They are yours only. A conductor running locally dispatches the stories the sprint file gives to its `DEVELOPER`, and the stories it gives to nobody in particular (`default`). A story that belongs to another developer is deferred, by whatever route its harness is started, until a conductor that holds their credentials runs: theirs, or the one on GitHub Actions. So your credentials are never used for a story named as someone else's.
 - `openssl` on the path. It signs the request for the App's token.
 
 The local conductor acts on GitHub as the Conductor App, exactly like the Actions job: it mints the App's token itself from that key. It does not act as you. If it did, you would be the author of the pull requests it opens, and GitHub does not let an author approve their own pull request.
@@ -62,7 +62,7 @@ bin/agentctl conductor status
 
 | Situation | What to do |
 |---|---|
-| You want to pause everything | Set the variable `CONDUCTOR_PAUSED` to `true`. It is read live on every pass, so it stops the local conductor too, within one pass. A paused conductor dispatches nothing and opens no pull requests |
+| You want to pause everything | Set the variable `CONDUCTOR_PAUSED` to `true`. It is read live on every pass, so it stops the local conductor too, within one pass. A paused conductor dispatches nothing, opens no pull requests and merges nothing |
 | You want to know the current state | Look at the Director's brief issue, or run `bin/agentctl status --markdown` |
 | You want to know what the conductor will do next | `gh workflow run conductor.yml -f dry_run=true`, then read the run log. A dry run creates nothing. While paused it shows only `halt` |
 | A story has been labelled `needs-human` | The conductor mentions the humans in a comment on the story issue; it does not assign the issue to anyone. Read the triage explanation and options on the issue, decide, then remove the label; if the spec needs changing, change the spec |
@@ -72,13 +72,14 @@ bin/agentctl conductor status
 | You want to know how much Actions has been used | `bin/agentctl budget --dry-run`, or look at the first line of the brief. This is an estimate; GitHub's billing page is the source of truth |
 | The Actions allowance is running out | Overflow is off: `overflow_runner` in `policy/conductor.toml` is empty, so `agentctl budget` reports usage and moves nothing. When the allowance runs out, CI stops and nothing merges (**To verify**). Your options: wait for the next month; pay for more minutes; or set `overflow_runner` to a runner that is dedicated to these jobs, holds no credentials and is recreated for every job. The Lima VM in `sandbox/` does not qualify: `ci` and `security` execute pull request code, and that VM is long-lived, has passwordless sudo and holds an agent's logins. Running the conductor locally (above) saves its share of the minutes |
 | A story should run on a particular person's subscriptions | Name them in the sprint file: `assignee` is the default for the sprint, and an `[owners]` table overrides it per story (`"012" = "alice"`). Issue assignees are not used |
-| An approved spec, sprint or chore pull request | Nothing to do. The conductor opened it with auto-merge on, so it merges by itself once the checks are green |
+| You approved a spec or sprint pull request | Nothing more to do. At its next pass the conductor enables auto-merge on it, and it merges once the checks are green. On Actions that pass is started by `risk-gate` re-running on your review; locally it is the next poll. It does not happen while the conductor is paused |
+| A `chore/` pull request is ready | Merge it yourself. The conductor never merges a `chore/` pull request |
 | You need to change the pipeline itself | Ask the agent directly in a session; the work happens on a `chore/` branch and you approve the PR |
 | You suspect something is wrong | Pause, then run [redteam-project.md](redteam-project.md) and [redteam-machine.md](redteam-machine.md) |
 
 ## 2. Turning on auto-merge
 
-This is about story pull requests. Spec, sprint and chore pull requests are opened with auto-merge on, whatever this setting says: they merge by themselves once the checks are green and every approval they need has been given. A chore pull request that changes only documentation nobody owns is T0 and needs no approval, so it merges on green checks alone, in shadow mode too (**To verify**).
+This is about story pull requests. A spec or sprint pull request that a code owner has approved gets auto-merge from the conductor whatever this setting says, because the decision to merge was a person's. A pull request nobody has to review is never picked up that way, and a `chore/` pull request is always merged by a person.
 
 Stay in shadow mode for at least one sprint. Each time the conductor notifies you that a PR "can be merged", spend a minute making your own judgement and note whether you agree. After you have agreed consistently for a while, set this in `policy/conductor.toml`:
 
@@ -93,5 +94,5 @@ After a further while, add `"T1"`. A change to this file is itself T2 and needs 
 1. They join the organization and become a repo admin.
 2. In `policy/roles.toml`, add them to `humans` and give them a `[developers.LOGIN.stages]` table. In `.github/CODEOWNERS`, add them to the paths they may approve. Add them to `directors` and to the product paths only if they are to approve product decisions.
 3. They follow [new-machine.md](new-machine.md) from start to finish: their own agent App, their own secrets, their sandbox and their own cloud accounts. Their secrets go in the `conductor` environment, not in the repository secrets, with their login as the suffix (upper case, any other character as `_`): `DISPATCH_TOKEN_ALICE`.
-4. For stories that are theirs: name them in the sprint file's `[owners]` table (`"012" = "alice"`), or make them the sprint's `assignee`. The conductor then uses their harness configuration, their credentials and their subscription. Setting the assignee on the story issue has no effect. A stage that runs in a local sandbox (`via = "sbx"`) only starts on their own Mac, while `conductor here` runs there with `DEVELOPER` set to their login.
+4. For stories that are theirs: name them in the sprint file's `[owners]` table (`"012" = "alice"`), or make them the sprint's `assignee`. The conductor then uses their harness configuration, their credentials and their subscription. Setting the assignee on the story issue has no effect. A conductor on someone else's Mac defers their stories; they are dispatched by the conductor on GitHub Actions or by `conductor here` on their own Mac with `DEVELOPER` set to their login. A stage that runs in a local sandbox (`via = "sbx"`) only starts in the second case.
 5. Product decisions stay with the directors: only they are owners of `docs/specs/`, `docs/sprints/` and `docs/product/`.

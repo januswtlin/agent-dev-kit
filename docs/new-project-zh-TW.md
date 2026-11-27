@@ -132,7 +132,7 @@ CONDUCTOR_APP_ID=APP_ID scripts/apply-rulesets.sh
 - `main-merge`：只有 repo admin 與 Conductor App 可以更新 default branch。Agent 的 token 可以 push branch，而這個 ruleset 讓它即使在 pull request 的每個 check 都是綠的時候也無法合併。Admin 與 Conductor App 仍然必須滿足 `main` 的全部要求。
 - `release-tags`：只有 repo admin 可以建立、移動或刪除 `v*` tag。
 
-在 Settings > General > Pull Requests：開啟 Allow auto-merge、只允許 squash merging、開啟 Automatically delete head branches。Allow auto-merge 不是選用的：conductor 開啟 spec、sprint 與 chore 的 pull request 時會替它啟用 auto-merge，而這是你核准之後唯一會合併它們的機制。
+在 Settings > General > Pull Requests：開啟 Allow auto-merge、只允許 squash merging、開啟 Automatically delete head branches。Allow auto-merge 不是選用的：code owner 核准 spec 或 sprint 的 pull request 之後，conductor 會在它的下一輪替這個 pull request 啟用 auto-merge，合併靠的就是這個。不論 `auto_merge_tiers` 怎麼設它都會這樣做，因為這個決定是人做的。它絕不會對 `chore/` 的 pull request 這樣做；那些由人來合併。
 
 確認：
 
@@ -176,14 +176,19 @@ make lint
 git add docs/specs/001-hello docs/sprints/001.toml && git commit -m "Add the spike story and sprint 001" && git push -u origin sprint/001
 ```
 
-2. 等 conductor 為 `sprint/001` 開啟 pull request。它一開就是可審狀態，並已啟用 auto-merge。先不要核准。
-3. 暫停 conductor。否則 sprint 檔一合併就會立刻開始一次真正的執行：
+2. 等 conductor 為 `sprint/001` 開啟 pull request。它一開就是可審狀態。等到它的 check 全綠。
+3. 暫停 conductor。否則 sprint 檔一合併就會立刻開始一次真正的執行。這也表示 conductor 不會替你合併這一個 pull request：暫停中的 conductor 什麼都不做，包含啟用 auto-merge：
 
 ```bash
 gh variable set CONDUCTOR_PAUSED --body true
 ```
 
-4. 核准這個 pull request。你不用按 merge：check 全綠之後它會自己合併。合併會觸發 conductor 執行；暫停期間每一次都只印出 `halt`。
+4. 核准這個 pull request，然後自己合併它，只有這一次。合併會觸發 conductor 執行；暫停期間每一次都只印出 `halt`：
+
+```bash
+gh pr merge sprint/001 --squash
+```
+
 5. 要求一次 dry run。暫停期間它同樣只印出 `halt (kill switch is on)`，因為暫停中的 conductor 不會計算計畫。這可以確認 kill switch 有效：
 
 ```bash
@@ -221,7 +226,7 @@ Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡
 | `reconcile` job 在 App token 那一步失敗，或被拒絕使用 environment | 檢查 environment `conductor` 是否存在、它的 branch 規則是否允許 `main`，以及 `CONDUCTOR_APP_PRIVATE_KEY` 是這個 environment 的 secret，而不是 repository secret |
 | Branch 已 push，卻沒有出現 pull request | 檢查 `notify` 是否因這次 push 而執行，之後是否接著有一次 `conductor` 執行。`CONDUCTOR_PAUSED` 為 `true` 時 conductor 不會開任何東西，一天也不會開超過 `max_prs_per_day` 個 story pull request。Branch 名稱必須以 `story/`、`spec/`、`sprint/` 或 `chore/` 開頭 |
 | Pull request 開了但 check 沒跑 | 它必須由 Conductor App 開啟，不是用 `GITHUB_TOKEN`。檢查 `reconcile` job 是否用了 App token。另外，check 只會為目標是 `main` 的 pull request 執行 |
-| 已核准的 spec 或 sprint pull request 沒有合併 | 檢查 Allow auto-merge 是否開啟（第 5 節）、這個 pull request 是否已啟用 auto-merge，以及五個 check 在你核准的那個 commit 上是否全綠。核准之後再有 push，核准就失效 |
+| 已核准的 spec 或 sprint pull request 沒有合併 | Conductor 是在核准之後的下一輪才啟用 auto-merge，不是在你核准的那一刻。檢查你的 review 之後是否接著有一次 `conductor` 執行（在 Actions 上是由 `risk-gate` 重新執行所啟動）、conductor 沒有被暫停、Allow auto-merge 是否開啟（第 5 節）、核准是否來自 code owner，以及五個 check 在你核准的那個 commit 上是否全綠。核准之後再有 push，核准就失效。`chore/` 的 pull request 絕不會由 conductor 合併：請自己合併 |
 | 某個 harness 無法由雲端觸發 | 在 `policy/roles.toml` 把它改成 `via = "sbx"`。它的 stage 會改在開發者 Mac 上的 Docker Sandbox 執行，並等到那台 Mac 上有 `bin/agentctl conductor here` 在跑。這是在 `chore/` branch 上的 T2 變更 |
 | Agent 沒有加 `done:*` label | 檢查 agent 身分是否有 Issues 寫入權；必要時在 prompt 中加強 |
 | `agent-review` 一直 pending | 如果是 Claude review，看 `agent-review` workflow 的執行：review 沒有完成時 `publish` job 會設成 failure，所以 pending 表示這次執行根本沒有開始，或無法解析 pull request。檢查 `CLAUDE_CODE_OAUTH_TOKEN` 是 `conductor` environment 的 secret，並檢查 action 的輸入參數。如果是 Codex review，檢查 `REVIEW_BOTS` |
@@ -237,8 +242,8 @@ Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡
 Spike 用掉了 sprint 001，所以第一個真正的 sprint 是 sprint 002。
 
 1. 在 `docs/product/roadmap.md` 加幾行需求，經 PR 合併；或用 PO chat 逐一討論。
-2. PO 為每個 story push 一個 `spec/` branch，conductor 開啟 pull request。核准它。核准就夠了：check 全綠之後它會自己合併。
+2. PO 為每個 story push 一個 `spec/` branch，conductor 開啟 pull request。核准它。核准就夠了：conductor 會在下一輪啟用 auto-merge，check 全綠之後 pull request 就會合併。
 3. Planner 會在 sprint 接近完成時起草下一個 sprint。第一個真正的 sprint 需要手動請它起草：開一個 Claude Code session，要它依 `prompts/planner.md` 起草 sprint 002。
-4. 核准 sprint 的 pull request。它會自己合併，conductor 從這裡接手。
+4. 核准 sprint 的 pull request。它以同樣的方式合併，conductor 從這裡接手。
 
 Story pull request 的自動合併一開始是關閉的（shadow mode）。何時以及如何開啟，見 [operations-zh-TW.md](operations-zh-TW.md) 第 2 節。

@@ -15,7 +15,7 @@
 
 | # | 嘗試 | 預期 | 結果 |
 |---|---|---|---|
-| D1 | 只改 `docs/guideline.md` 的 PR。自己開這個 PR，branch 名稱不要以 `story/`、`spec/`、`sprint/` 或 `chore/` 開頭 | 標為 T0，check 全綠；沒有任何東西會自動合併它。同樣的變更放在 `chore/` branch 上的情況，見表格下方的說明 | |
+| D1 | 只改 `docs/guideline.md` 的 PR。自己開這個 PR，branch 名稱不要以 `story/`、`spec/`、`sprint/` 或 `chore/` 開頭 | 標為 T0，check 全綠；沒有任何東西會自動合併它。見表格下方的說明 | |
 | D2 | 修改 `policy/risk-tiers.toml`，把 `high_risk` 清空 | 標為 T2；沒有你的核准無法合併。而且這個 PR 的 tier 是用 main 上的舊 policy 計算的 | |
 | D3 | 在不是 story branch 的 branch 上改程式碼 | T2，理由是沒有對應的 story | |
 | D4 | 新增一個相依套件 | T2 | |
@@ -30,10 +30,10 @@
 | D13 | Story 的 PR 還是 draft 的時候 | 只跑 lint 與 `risk-gate`；無法合併 | |
 | D14 | 開一個 base 不是 `main` 的 PR（例如從 `story/000-example` 合到 `test/base` 這個 branch） | 上面不會出現 `ci`、`security`、`spec-verify` 或 `risk-gate` 的 check，也沒有 `tier:` label。針對其他 base 取得的 status 不應該存在 | |
 | D15 | 只改一個 lock file 的 PR（例如 `package-lock.json` 或 `uv.lock`） | 標為 T2，理由是 `dependency_manifests`；沒有你的核准無法合併 | |
-| D16 | Push 一個帶有新 spec 的 branch `spec/NNN-slug`，然後等待。接著核准那個 PR，其他什麼都不做 | Conductor 開啟 PR，一開就是可審狀態，並已啟用 auto-merge。你核准而且 check 全綠之後，它會自己合併。這一項應該要「成功」。在你核准之前它不可以合併 | |
+| D16 | Push 一個帶有新 spec 的 branch `spec/NNN-slug`，然後等待。接著核准那個 PR，其他什麼都不做 | Conductor 開啟 PR，一開就是可審狀態，沒有啟用 auto-merge。你核准之後，conductor 的下一輪會啟用 auto-merge，check 全綠時 PR 就會合併。這一項應該要「成功」。在你核准之前，auto-merge 不可以被啟用，它也不可以合併 | |
 | D17 | 故意讓一次 Claude review 失敗：把 `conductor` environment 的 secret `CLAUDE_CODE_OAUTH_TOKEN` 設成無效的值，然後對一個開啟中的 story PR 執行 `gh workflow run agent-review.yml -f pr=N -f story=NNN`。如果你是用帶 `_LOGIN` 後綴的名稱存這個 secret，就改那一個，並加上 `-f developer=LOGIN_IN_UPPER_CASE`。做完後把 secret 還原 | PR 的 head commit 上的 `agent-review` status 是 failure（"review requested changes or did not finish"）。它絕不會是 success，也不會停在 pending | |
 
-關於 D1 的說明：名稱以 `spec/`、`sprint/` 或 `chore/` 開頭的 branch，pull request 是 conductor 開的，並已啟用 auto-merge。如果這樣的 pull request 只改到沒有 code owner 的文件，它就是 T0，不需要任何核准，check 全綠就會合併，在 shadow mode 下也一樣。`auto_merge_tiers` 只管 story 的 pull request。請用一個 `chore/` branch 試一次，並記下發生了什麼，讓你知道有這條路徑存在。
+關於 D1 的說明：請從一個 `chore/` branch 再做一次，讓 pull request 由 conductor 開啟。結果必須相同。Conductor 只會對 code owner 核准過的 `spec/` 或 `sprint/` pull request 啟用 auto-merge；沒有人需要 review 的 pull request 沒有 review decision，絕不會被挑上，而 `chore/` 的 pull request 絕不會由 conductor 合併。
 
 ## F. Conductor
 

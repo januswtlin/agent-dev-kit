@@ -19,7 +19,7 @@ Conductor 在哪裡跑由你決定：在 GitHub Actions 上，或在你 Mac 的�
 # The Conductor App (new-project.md, section 3). The key path must be absolute; "~" is not expanded.
 CONDUCTOR_APP_ID=123456
 CONDUCTOR_APP_KEY=/Users/YOU/.config/agent-dev/OWNER-REPO/conductor-app.pem
-# Your GitHub login. A local sandbox is not started for a story that the sprint file gives to someone else.
+# Your GitHub login. This conductor does not dispatch a story that the sprint file gives to someone else.
 DEVELOPER=YOUR_LOGIN
 # Dispatch credentials, the same values as the secrets in new-machine.md, section 3.
 CLAUDE_TRIGGER_URL=https://...
@@ -27,7 +27,7 @@ CLAUDE_TRIGGER_TOKEN=...
 DISPATCH_TOKEN=...
 ```
 
-  `CONDUCTOR_APP_ID`、`CONDUCTOR_APP_KEY` 與 `DEVELOPER` 是必要的；少了它們，`here`、`away` 與 `status` 都會停下來並顯示訊息。派發用的憑證則依你使用的 harness 而定。和在 Actions 上一樣，帶 `_LOGIN` 後綴的名稱（`CLAUDE_TRIGGER_URL_ALICE`）用於那位開發者的 story，不帶後綴的名稱是所有人的後備。多人的時候，請替每個人的憑證加上後綴，否則別人的 story 會用你的憑證送出。
+  `CONDUCTOR_APP_ID`、`CONDUCTOR_APP_KEY` 與 `DEVELOPER` 是必要的；少了它們，`here`、`away` 與 `status` 都會停下來並顯示訊息。派發用的憑證則依你使用的 harness 而定。它們只屬於你。在本機跑的 conductor 會派發 sprint 檔交給它的 `DEVELOPER` 的 story，以及沒有指定給特定人的 story（`default`）。屬於另一位開發者的 story，不論它的 harness 以哪種方式啟動，都會被延後，直到持有那個人憑證的 conductor 執行：他自己的，或 GitHub Actions 上的那一個。所以你的憑證絕不會被用在指名屬於別人的 story 上。
 - 路徑上要有 `openssl`。它用來簽署取得 App token 的請求。
 
 本機的 conductor 在 GitHub 上以 Conductor App 的身分行動，和 Actions 的 job 完全一樣：它用那把 key 自己產生 App 的 token。它不是以你的身分行動。如果是，它開的 pull request 的作者就會是你，而 GitHub 不允許作者核准自己的 pull request。
@@ -62,7 +62,7 @@ bin/agentctl conductor status
 
 | 情況 | 做法 |
 |---|---|
-| 想暫停一切 | 把 variable `CONDUCTOR_PAUSED` 設為 `true`。它在每一輪都是即時讀取的，所以本機的 conductor 也會在一輪之內停下來。暫停中的 conductor 不派發任何東西，也不開 pull request |
+| 想暫停一切 | 把 variable `CONDUCTOR_PAUSED` 設為 `true`。它在每一輪都是即時讀取的，所以本機的 conductor 也會在一輪之內停下來。暫停中的 conductor 不派發任何東西、不開 pull request，也不合併任何東西 |
 | 想知道現在的狀態 | 看 Director's brief issue，或執行 `bin/agentctl status --markdown` |
 | 想知道 conductor 接下來會做什麼 | `gh workflow run conductor.yml -f dry_run=true`，然後看執行紀錄。Dry run 不會建立任何東西。暫停期間它只顯示 `halt` |
 | 某個 story 被標上 `needs-human` | Conductor 會在 story issue 的留言裡提及人類；它不會把 issue 指派給任何人。讀 issue 上 triage 的說明與選項，做決定，然後移除 label；如果需要改 spec，就改 spec |
@@ -72,13 +72,14 @@ bin/agentctl conductor status
 | 想知道 Actions 用了多少 | `bin/agentctl budget --dry-run`，或看 brief 的第一行。這是估算；以 GitHub 的帳單頁面為準 |
 | Actions 額度快用完了 | Overflow 是關閉的：`policy/conductor.toml` 的 `overflow_runner` 是空的，所以 `agentctl budget` 只回報用量，不搬動任何東西。額度用完時 CI 會停止，什麼都不會合併（**待驗證**）。你的選項：等到下個月；付費買更多分鐘數；或把 `overflow_runner` 設為一個專供這些 job 使用、不持有任何憑證、每個 job 都重新建立的 runner。`sandbox/` 裡的 Lima VM 不符合條件：`ci` 與 `security` 會執行 pull request 的程式碼，而那個 VM 是長期存在的、有免密碼的 sudo，還存著 agent 的登入資訊。讓 conductor 在本機跑（見上）可以省下它那一份分鐘數 |
 | 某個 story 應該用特定某個人的訂閱來跑 | 在 sprint 檔裡指名：`assignee` 是整個 sprint 的預設，`[owners]` table 可以逐個 story 覆寫（`"012" = "alice"`）。Issue 的 assignee 不會被使用 |
-| 一個已核准的 spec、sprint 或 chore pull request | 不用做任何事。Conductor 開它的時候就啟用了 auto-merge，所以 check 全綠之後它會自己合併 |
+| 你核准了一個 spec 或 sprint pull request | 不用再做任何事。Conductor 會在它的下一輪替這個 pull request 啟用 auto-merge，check 全綠之後就會合併。在 Actions 上，那一輪是由 `risk-gate` 因你的 review 重新執行所啟動；在本機則是下一次輪詢。Conductor 暫停期間不會發生 |
+| 一個 `chore/` pull request 可以合併了 | 自己合併。Conductor 絕不會合併 `chore/` 的 pull request |
 | 需要修改 pipeline 本身 | 在 session 中直接要求 agent；工作在 `chore/` branch 上進行，由你核准 PR |
 | 懷疑有異常 | 暫停，然後執行 [redteam-project-zh-TW.md](redteam-project-zh-TW.md) 與 [redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) |
 
 ## 2. 開啟自動合併
 
-這一節講的是 story 的 pull request。Spec、sprint 與 chore 的 pull request 不論這個設定為何，開啟時就啟用了 auto-merge：只要 check 全綠，而且它們需要的每個核准都已給出，就會自己合併。只改到沒有 owner 的文件的 chore pull request 是 T0，不需要任何核准，所以只要 check 全綠就會合併，在 shadow mode 下也一樣（**待驗證**）。
+這一節講的是 story 的 pull request。Code owner 核准過的 spec 或 sprint pull request，不論這個設定為何，conductor 都會替它啟用 auto-merge，因為合併的決定是人做的。沒有人需要 review 的 pull request 絕不會經由這條路被挑上，而 `chore/` 的 pull request 一律由人合併。
 
 至少維持 shadow mode 一個 sprint。每次 conductor 通知你某個 PR「可以合併」時，花一分鐘自己判斷，記下你是否同意。持續同意一段時間之後，在 `policy/conductor.toml` 設定：
 
@@ -93,5 +94,5 @@ auto_merge_tiers = ["T0"]
 1. 他加入 organization，並成為 repo admin。
 2. 在 `policy/roles.toml` 把他加進 `humans`，並給他一個 `[developers.LOGIN.stages]` table。在 `.github/CODEOWNERS` 把他加到他可以核准的路徑。只有在他要核准產品決定時，才把他加進 `directors` 與產品相關的路徑。
 3. 他把 [new-machine-zh-TW.md](new-machine-zh-TW.md) 從頭到尾做完：他自己的 agent App、他自己的 secret、他的 sandbox 與他自己的雲端帳號。他的 secret 放在 `conductor` 這個 environment 裡，不是 repository secret，並以他的帳號作為後綴（大寫，其他字元一律換成 `_`）：`DISPATCH_TOKEN_ALICE`。
-4. 屬於他的 story：在 sprint 檔的 `[owners]` table 裡指名（`"012" = "alice"`），或把他設為該 sprint 的 `assignee`。Conductor 就會使用他的 harness 設定、他的憑證與他的訂閱。在 story issue 上設定 assignee 沒有作用。在本機 sandbox 執行的 stage（`via = "sbx"`）只會在他自己的 Mac 上啟動，而且那台 Mac 上要有 `DEVELOPER` 設為他帳號的 `conductor here` 在跑。
+4. 屬於他的 story：在 sprint 檔的 `[owners]` table 裡指名（`"012" = "alice"`），或把他設為該 sprint 的 `assignee`。Conductor 就會使用他的 harness 設定、他的憑證與他的訂閱。在 story issue 上設定 assignee 沒有作用。別人 Mac 上的 conductor 會延後他的 story；它們由 GitHub Actions 上的 conductor 派發，或由他自己 Mac 上 `DEVELOPER` 設為他帳號的 `conductor here` 派發。在本機 sandbox 執行的 stage（`via = "sbx"`）只有在後一種情況才會啟動。
 5. 產品決定仍然屬於 director：只有他們是 `docs/specs/`、`docs/sprints/` 與 `docs/product/` 的 owner。
