@@ -25,12 +25,8 @@ planner = "claude"
 # --- How each harness is started -----------------------------------------------------
 # via = "http"     POST to a cloud scheduled task's API trigger (laptop can be closed)
 # via = "comment"  post a mention that starts a cloud task (laptop can be closed)
-# via = "sbx"      start a clone-mode Docker Sandbox on the developer's Mac. Needs
-#                  `agentctl conductor here` running on that Mac; while the
-#                  conductor is on GitHub Actions these stages simply wait
-# via = "workflow" run .github/workflows/agent-job.yml on a self-hosted runner in the
-#                  developer's Lima VM. NOT part of the supported setup: that VM is
-#                  long-lived and shared between stages (sandbox/runner/README.md)
+# via = "sbx"      start a fresh clone-mode Docker Sandbox on the Mac that runs
+#                  `agentctl conductor`; these stages advance only while it runs
 #
 # Credentials are per developer. A story the sprint file gives to a named person
 # uses NAME_<LOGIN> only (login in upper case, other characters as "_"); a story of
@@ -87,7 +83,7 @@ triage = ["claude"]
 # triage = ["codex"]
 
 # Example C: add a local model for the cheap stages. It runs in a local sandbox,
-# so those stages only start while `agentctl conductor here` runs on that person's Mac.
+# so those stages only start while `agentctl conductor` runs on that person's Mac.
 #
 # [developers.SOME_LOGIN.stages]
 # design = ["claude"]

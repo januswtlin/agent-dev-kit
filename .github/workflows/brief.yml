@@ -49,7 +49,6 @@ jobs:
       - name: Build the brief
         env:
           CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
-          CONDUCTOR_HOME: ${{ vars.CONDUCTOR_HOME }}
           WEEKLY: ${{ github.event.schedule == '7 1 * * 1' || inputs.weekly }}
         run: |
           since="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
@@ -59,7 +58,6 @@ jobs:
             echo
             bin/agentctl status --markdown
             head -1 budget.txt
-            echo "Conductor runs on: ${CONDUCTOR_HOME:-actions}"
             echo
             echo "### Waiting for your review"
             gh pr list --search "review-requested:@me is:open" --json number,title \

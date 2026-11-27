@@ -2,14 +2,12 @@
 # Agent sandboxes with Docker Sandboxes (sbx). Run on the Mac, from the project directory.
 #
 #   sandbox/sbx.sh setup              one-time: lock down sbx and install the token helpers
-#   sandbox/sbx.sh up HARNESS [STAGE] interactive agent in a clone-mode sandbox (claude | codex);
-#                                     STAGE picks the privileges, default impl
 #   sandbox/sbx.sh job HARNESS STORY STAGE PROMPT
-#                                     one unattended stage; used by the local conductor
-#   sandbox/sbx.sh check [HARNESS] [STAGE]
-#                                     run the boundary checks from inside
-#   sandbox/sbx.sh rm [HARNESS] [STAGE]
-#                                     remove the interactive sandbox
+#                                     one unattended stage in a fresh sandbox; used by the conductor
+#
+# There is no interactive mode. To work with an agent yourself, use sbx directly
+# (`sbx create --clone`, `sbx run`): such a sandbox gets the machine-wide deny-all
+# preset and allowlist from `setup`, but no GitHub token and no harness deny rules.
 #
 # What makes this the boundary:
 #   - one microVM per agent, with its own kernel
@@ -18,10 +16,10 @@
 #     Mac, including .git/hooks. Its only way out is `git push`.
 #     The WHOLE repository directory is visible read-only, ignored and untracked
 #     files included. So no secret may live in it: this script refuses to start
-#     or re-attach while it finds a file whose name looks like one.
+#     while it finds a file whose name looks like one.
 #   - network: deny-all preset, plus the hosts in sandbox/allowlist.txt. What a
-#     sandbox can really reach is probed from inside it on every start and every
-#     re-attach; what `setup` once configured is not taken on trust.
+#     sandbox can really reach is probed from inside it on every start; what
+#     `setup` once configured is not taken on trust.
 #   - no GitHub credential inside the VM: the sbx proxy on the host swaps a
 #     placeholder for a one-hour token of YOUR agent GitHub App, which a helper on
 #     the host mints on demand. The App's private key never leaves the host.
@@ -117,7 +115,7 @@ no_secrets_in_tree() {
 
 # What the sandbox can really reach, asked from inside it. `setup` configures a
 # deny-all preset once, but the preset is machine-wide and can be changed behind
-# this script's back, and a sandbox that already exists keeps what it was given.
+# this script's back.
 #
 # This is a spot check, not a proof of the allowlist: it asks for one host that must
 # be reachable and one or two that must not be. The three URLs all answer 200 when
@@ -247,27 +245,7 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     # Every sandbox: source control and model providers. Registries are added per sandbox.
     allow_hosts "$here/allowlist.txt"
     if [ "${AGENT_OLLAMA:-0}" = "1" ]; then sbx policy allow network localhost:11434; fi
-    echo "Done. Log in to your harnesses as the sbx documentation describes, then: sandbox/sbx.sh up claude"
-    ;;
-  up)
-    need_sbx
-    harness="${2:?usage: sbx.sh up HARNESS [STAGE]}"; stage="${3:-impl}"
-    valid_harness "$harness"; valid_stage "$stage"
-    trusted_checkout
-    name="ag-$tag-$stage-$harness"
-    valid_name "$name"
-    if sbx ls 2>/dev/null | grep -qw -- "$name"; then
-      # The sandbox keeps what it was created with; the directory it mounts and the
-      # machine's network preset may have changed since.
-      echo "re-attaching to $name (created for stage $stage)"
-      same_repository
-      no_secrets_in_tree
-      read -r _ network _ < <(agentctl stage-profile "$stage")
-      verify_network "$name" "$network"
-    else
-      create "$name" "$harness" "$stage"
-    fi
-    sbx run --name "$name"
+    echo "Done. Log in to your harnesses as the sbx documentation describes."
     ;;
   job)
     need_sbx
@@ -304,18 +282,6 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     status=0
     sbx run --name "$name" -- "$@" >> "$log" 2>&1 || status=$?
     exit "$status"
-    ;;
-  check)
-    need_sbx
-    harness="${2:-claude}"; stage="${3:-impl}"; valid_harness "$harness"; valid_stage "$stage"
-    # Inside the sandbox the only copy of the tooling is the mounted repository,
-    # which is exactly what these checks inspect.
-    sbx exec "ag-$tag-$stage-$harness" -- python3 -I /run/sandbox/source/tools/run.py doctor --inside
-    ;;
-  rm)
-    need_sbx
-    harness="${2:-claude}"; stage="${3:-impl}"; valid_harness "$harness"; valid_stage "$stage"
-    sbx rm --force "ag-$tag-$stage-$harness"
     ;;
   *)
     sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'

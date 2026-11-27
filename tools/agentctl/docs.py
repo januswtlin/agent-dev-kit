@@ -24,7 +24,6 @@ REQUIRED = [
     "docs/redteam-project.md",
     "docs/redteam-machine.md",
     "docs/product/domain.md",
-    "sandbox/runner/README.md",
 ]
 
 SKIP_DIRS = {".git", "node_modules", "reports", "__pycache__"}

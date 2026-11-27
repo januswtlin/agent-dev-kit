@@ -41,6 +41,8 @@ BRANCH_PREFIXES = ("story/", "spec/", "sprint/", "chore/")
 STORY_BRANCH_RE = re.compile(r"^story/(\d{3})(?:-[A-Za-z0-9._-]*)?$")
 SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
 NAME_RE = re.compile(r"^[a-z][a-z-]{1,30}$")
+# The installed kit this module belongs to (tools/agentctl/github.py -> kit root).
+KIT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Deferred(Exception):
@@ -68,8 +70,8 @@ class Unreadable(OSError):
 def variable(name: str) -> str:
     """A repository variable, read live. Empty when it is not set.
 
-    A failed read raises. The kill switch and the lease are variables, and a
-    network error must never read as "not paused" or "nobody holds the lease".
+    A failed read raises. The kill switch is a variable, and a network error must
+    never read as "not paused".
     """
     try:
         return gh("api", f"repos/{{owner}}/{{repo}}/actions/variables/{name}", "--jq", ".value").strip()
@@ -435,16 +437,16 @@ def secret(name: str, developer: str = "") -> str:
 def preflight(action: Action, context: dict, roles: dict) -> None:
     """Raise now if this dispatch cannot be sent from here.
 
-    Checked before anything is written, so a stage that has to wait (for the
-    local conductor, for another developer's machine) leaves no marker and no
-    comment behind, however many passes it waits.
+    Checked before anything is written, so a stage that has to wait (for another
+    developer's machine) leaves no marker and no comment behind, however many
+    passes it waits.
     """
     if not NAME_RE.match(action.stage) or not NAME_RE.match(action.harness):
         raise SystemExit(f"refusing to dispatch: bad stage or harness name ({action.stage!r}, {action.harness!r})")
     harness = roles.get("harness", {}).get(action.harness, {})
     developer = context.get("assignees", {}).get(action.story, "")
     who = f" and developer '{developer}'" if developer else ""
-    via = harness.get("via", "workflow")
+    via = harness.get("via", "")
     local = os.environ.get("CONDUCTOR_LOCAL_DEVELOPER", "")
     if local and developer and developer != local:
         # A conductor on one person's Mac holds that person's credentials only.
@@ -457,17 +459,15 @@ def preflight(action: Action, context: dict, roles: dict) -> None:
         if os.environ.get("CONDUCTOR_SECRETS") and not secret(token_env, developer):
             raise SystemExit(f"no {token_env} configured for the review{who}")
     elif via == "sbx":
-        if os.environ.get("GITHUB_ACTIONS") or not local:
-            raise Deferred(f"harness '{action.harness}' runs in a local sandbox; waiting for `agentctl conductor here`")
-        if not os.environ.get("AGENTCTL_TRUSTED_SCRIPTS"):
-            raise SystemExit("AGENTCTL_TRUSTED_SCRIPTS is not set; local sandboxes are started by `agentctl conductor here`")
+        if not local:
+            raise SystemExit(f"harness '{action.harness}' runs in a local sandbox, which only `agentctl conductor` starts")
     elif via == "comment":
         if not secret(harness.get("token_env", "DISPATCH_TOKEN"), developer):
             raise SystemExit(f"no dispatch token configured for harness '{action.harness}'{who}")
     elif via == "http":
         if not secret(harness.get("url_env", "CLAUDE_TRIGGER_URL"), developer).startswith("https://"):
             raise SystemExit(f"no https trigger URL configured for harness '{action.harness}'{who}")
-    elif via != "workflow":
+    elif via not in ("sbx", "comment", "http"):
         raise SystemExit(f"unknown dispatch method '{via}' for harness '{action.harness}'")
 
 
@@ -475,7 +475,7 @@ def _send(action: Action, context: dict, roles: dict) -> None:
     """Hand the work to a harness. `via` is configured per harness in policy/roles.toml."""
     harness = roles.get("harness", {}).get(action.harness, {})
     developer = context.get("assignees", {}).get(action.story, "")
-    via = harness.get("via", "workflow")
+    via = harness.get("via", "")
     prompt = _prompt(action, context)
     issue = str(context["issues"].get(action.story, context["sprint_issue"]))
     pr = context.get("prs", {}).get(action.story)
@@ -489,16 +489,11 @@ def _send(action: Action, context: dict, roles: dict) -> None:
            "-f", f"pr={pr}", "-f", f"story={action.story}", "-f", f"developer={developer_key(developer)}",
            "-f", f"sha={context.get('shas', {}).get(action.story, '')}")
     elif via == "sbx":
-        # A clone-mode Docker Sandbox on a developer's Mac. Only a conductor running on
-        # THAT developer's Mac can start one; from anywhere else the stage waits.
-        script = Path(os.environ["AGENTCTL_TRUSTED_SCRIPTS"]) / "sandbox" / "sbx.sh"
+        # A clone-mode Docker Sandbox on this Mac, started by the kit's own copy of the
+        # script: the installed kit, never a file from the project's tree.
+        script = KIT_ROOT / "sandbox" / "sbx.sh"
         subprocess.Popen([str(script), "job", action.harness, action.story or "sprint", action.stage, prompt],
                          cwd="/", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    elif via == "workflow":
-        # Self-hosted runner in a developer's VM. Not part of the supported setup path.
-        gh("workflow", "run", "agent-job.yml", "--ref", context["default_branch"],
-           "-f", f"story={action.story}", "-f", f"stage={action.stage}",
-           "-f", f"harness={action.harness}", "-f", f"prompt={prompt}", "-f", f"developer={developer}")
     elif via == "comment":
         # Cloud agents that start from a mention (for example Codex cloud). The comment
         # must come from the developer whose subscription runs the task.
@@ -517,26 +512,16 @@ def _send(action: Action, context: dict, roles: dict) -> None:
         urllib.request.urlopen(request, timeout=30).read()
 
 
-def execute(actions: list[Action], context: dict, roles: dict, dry_run: bool = False,
-            only=None, guard=None) -> int:
+def execute(actions: list[Action], context: dict, roles: dict, dry_run: bool = False) -> int:
     """Carry out the actions. One failing action does not stop the others.
 
-    `only(action, context)`, when given, selects the actions this run may carry
-    out; the rest are left to the other conductor. `guard()` is asked before
-    every dispatch and stops the run when it answers no (the lease has moved).
     Returns the number of actions that failed.
     """
     failures = 0
     for action in actions:
-        if only is not None and not only(action, context):
-            print(f"left to the other conductor: {action}")
-            continue
         print(("DRY-RUN " if dry_run else "") + str(action))
         if dry_run or action.kind == "halt":
             continue
-        if guard is not None and action.kind in ("dispatch", "draft-next-sprint") and not guard():
-            print("  the lease has moved; stopping this pass")
-            break
         try:
             _execute_one(action, context, roles)
         except Deferred as exc:

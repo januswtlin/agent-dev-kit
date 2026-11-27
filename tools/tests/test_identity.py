@@ -141,7 +141,7 @@ class DispatchTests(unittest.TestCase):
 
     def setUp(self):
         self.saved_env, self.saved_gh = dict(os.environ), github.gh
-        for name in ("GITHUB_ACTIONS", "CONDUCTOR_SECRETS", "CONDUCTOR_LOCAL_DEVELOPER", "AGENTCTL_TRUSTED_SCRIPTS"):
+        for name in ("CONDUCTOR_SECRETS", "CONDUCTOR_LOCAL_DEVELOPER"):
             os.environ.pop(name, None)
 
     def tearDown(self):
@@ -168,8 +168,8 @@ class DispatchTests(unittest.TestCase):
         self.assertIn(("issue", "edit", "2", "--remove-label", "done:impl"), calls)
 
     def test_a_failed_send_withdraws_its_marker(self):
-        roles = {"harness": {"claude": {"via": "workflow"}}}
-        failures, calls = self.run_actions(roles, dict(stage="impl", harness="claude", attempt=1),
+        roles = {"harness": {"claude": {"via": "http", "review_workflow": "agent-review.yml"}}}
+        failures, calls = self.run_actions(roles, dict(stage="review", harness="claude", attempt=1),
                                            fail=[("workflow", "run")])
         self.assertEqual(failures, 1)
         bodies = [c[4] for c in calls if c[:2] == ("issue", "comment")]
@@ -179,13 +179,12 @@ class DispatchTests(unittest.TestCase):
 
     def test_a_stage_that_has_to_wait_leaves_nothing_behind(self):
         roles = {"harness": {"ollama": {"via": "sbx"}}}
-        os.environ["GITHUB_ACTIONS"] = "true"
+        # Outside `agentctl conductor` there is no local developer: a sandbox stage is refused.
         failures, calls = self.run_actions(roles, dict(stage="impl", harness="ollama", attempt=1))
-        self.assertEqual((failures, calls), (0, []))
-        # On another developer's Mac it waits too, whatever the route: that conductor
-        # only holds its own developer's credentials.
-        del os.environ["GITHUB_ACTIONS"]
-        os.environ.update(CONDUCTOR_LOCAL_DEVELOPER="bob", AGENTCTL_TRUSTED_SCRIPTS="/x", DISPATCH_TOKEN="bobs")
+        self.assertEqual((failures, calls), (1, []))
+        # Another developer's story waits, whatever the route: this conductor only
+        # holds its own developer's credentials.
+        os.environ.update(CONDUCTOR_LOCAL_DEVELOPER="bob", DISPATCH_TOKEN="bobs")
         failures, calls = self.run_actions(roles, dict(stage="impl", harness="ollama", attempt=1))
         self.assertEqual((failures, calls), (0, []))
         failures, calls = self.run_actions({"harness": {"codex": {"via": "comment"}}}, dict(stage="impl", harness="codex", attempt=1))
@@ -219,19 +218,6 @@ class DispatchTests(unittest.TestCase):
             ("pr", "merge", "12", "--auto", "--squash", "--match-head-commit", "def"),
             ("pr", "merge", "12", "--disable-auto")])
 
-    def test_a_run_limited_to_other_developers_and_stopped_when_the_lease_moves(self):
-        from agentctl.reconcile import Action
-        github.gh = Recorder()
-        os.environ["DISPATCH_TOKEN_ALICE"] = "t"
-        roles = {"harness": {"codex": {"via": "comment"}}}
-        actions = [Action("mark-ready", story="001"), Action("dispatch", story="001", stage="impl", harness="codex", attempt=1)]
-        only = lambda action, context: action.kind == "dispatch"  # noqa: E731
-        self.assertEqual(github.execute(actions, self.CONTEXT, roles, only=only, guard=lambda: False), 0)
-        self.assertEqual(github.gh.calls, [])
-        self.assertEqual(github.execute(actions, self.CONTEXT, roles, only=only, guard=lambda: True), 0)
-        self.assertNotIn(("pr", "ready", "7"), github.gh.calls)
-        self.assertTrue(any(c[:2] == ("issue", "comment") for c in github.gh.calls))
-
     def test_missing_credentials_fail_before_anything_is_written(self):
         roles = {"harness": {"claude": {"via": "http"}, "codex": {"via": "comment"}}}
         for harness in ("claude", "codex"):
@@ -239,7 +225,7 @@ class DispatchTests(unittest.TestCase):
             self.assertEqual((failures, calls), (1, []), harness)
 
     def test_bad_names_never_reach_a_shell_or_a_path(self):
-        roles = {"harness": {"x": {"via": "workflow"}}}
+        roles = {"harness": {"x": {"via": "comment"}}}
         failures, calls = self.run_actions(roles, dict(stage="impl; rm -rf /", harness="x", attempt=1))
         self.assertEqual((failures, calls), (1, []))
 

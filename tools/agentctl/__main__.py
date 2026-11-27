@@ -12,7 +12,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import apptoken, budget, docs, doctor, lease, profiles, redgreen, risk, specs, trace
+from . import apptoken, budget, docs, doctor, local, profiles, redgreen, risk, specs, trace
 
 
 def _root() -> Path:
@@ -170,7 +170,7 @@ def cmd_evidence(args) -> int:
     return 0
 
 
-def _reconcile_once(root: Path, dry_run: bool, only=None, guard=None) -> int:
+def _reconcile_once(root: Path, dry_run: bool) -> int:
     from . import github, reconcile
 
     policy = _toml(root / "policy/conductor.toml")
@@ -180,71 +180,18 @@ def _reconcile_once(root: Path, dry_run: bool, only=None, guard=None) -> int:
     actions = reconcile.plan(state, policy, roles)
     if not actions:
         print("nothing to do")
-    return github.execute(actions, context, roles, dry_run=dry_run, only=only, guard=guard)
-
-
-def cmd_reconcile(args) -> int:
-    from . import github
-
-    root = _root()
-    only = guard = None
-    if args.respect_lease:
-        # On GitHub Actions: stand down while a local conductor holds a fresh lease.
-        # The variables are read now, not taken from the moment the job was queued.
-        ttl = _toml(root / "policy/conductor.toml").get("local_lease_minutes", 20)
-
-        def verdict() -> tuple[str, str]:
-            home, value = github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE")
-            return lease.decide(home, value, time.time(), ttl), lease.developer(lease.parse(value)[1])
-
-        try:
-            decision, local_developer = verdict()
-        except github.Unreadable as exc:
-            # Who holds the lease is unknown, so nothing is dispatched. The run still
-            # goes on, restricted to what is safe from anywhere: stopping.
-            print(f"{exc}; not dispatching. Withdrawing auto-merge is still attempted.")
-            decision, local_developer = "skip", ""
-        if decision == "skip":
-            # That conductor does everything except other developers' stories, which it
-            # leaves alone. Dispatch those from here. Withdrawing auto-merge is safe
-            # from anywhere and is done from here too, so that a pause never waits
-            # for a Mac that may be gone.
-            print(f"a local conductor holds the lease ({local_developer or 'developer unknown'}); "
-                  "only other developers' stories and auto-merge withdrawals are handled here")
-
-            def only(action, context) -> bool:
-                if action.kind in ("halt", "disable-auto-merge"):
-                    return True
-                owner = context.get("assignees", {}).get(action.story, "")
-                return bool(local_developer) and action.kind == "dispatch" and bool(owner) and owner != local_developer
-
-            def guard() -> bool:
-                try:
-                    return bool(local_developer) and verdict() == ("skip", local_developer)
-                except github.Unreadable:
-                    return False
-        else:
-            if decision == "takeover" and not args.dry_run:
-                print("the local conductor's lease expired; GitHub Actions takes over")
-                github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
-
-            def guard() -> bool:
-                try:
-                    return verdict()[0] != "skip"
-                except github.Unreadable:
-                    return False
-    return 1 if _reconcile_once(root, args.dry_run, only=only, guard=guard) else 0
+    return github.execute(actions, context, roles, dry_run=dry_run)
 
 
 def _conductor_identity(repo: Path) -> tuple[str, str, str]:
-    """Make this process act on GitHub as the Conductor App, like the Actions job does.
+    """Make this process act on GitHub as the Conductor App.
 
     Acting as the developer instead would make them the author of the pull
     requests the conductor opens, and GitHub does not let an author approve
     their own pull request.
     """
-    env_path = lease.conductor_env_path(repo)
-    settings = lease.load_env_file(env_path)
+    env_path = local.conductor_env_path(repo)
+    settings = local.load_env_file(env_path)
     missing = [k for k in ("CONDUCTOR_APP_ID", "CONDUCTOR_APP_KEY", "DEVELOPER") if not settings.get(k)]
     if missing:
         raise SystemExit(f"{env_path} must define {', '.join(missing)}. See docs/operations.md, section 1.")
@@ -264,94 +211,44 @@ def _as_conductor(app_id: str, key: str, full_name: str) -> None:
     os.environ["GH_TOKEN"] = apptoken.installation_token(app_id, key, full_name, profile="conductor")
 
 
+# After this many failed passes in a row the conductor waits longer between passes.
+BACKOFF_AFTER = 3
+BACKOFF_SECONDS = 900
+
+
 def cmd_conductor(args) -> int:
-    """Run the conductor in this terminal, or hand it back to GitHub Actions."""
-    import socket
-
-    from . import github
-
+    """Run the conductor in this terminal. It is the project's only conductor."""
     repo = _root()
-    # The conductor runs with this user's permissions and the pipeline's credentials.
-    # Refuse to start from a checkout whose tooling is not the default branch's.
-    default = subprocess.run(["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
-                             capture_output=True, text=True, cwd=repo).stdout.strip() or "origin/main"
-    differs = subprocess.run(["git", "diff", "--quiet", default, "--", "tools", "bin", "sandbox", "policy"], cwd=repo).returncode != 0
-    if differs and os.environ.get("AGENT_ALLOW_MODIFIED_SCRIPTS") != "1":
-        raise SystemExit(f"tools/, bin/, sandbox/ or policy/ differ from {default}. Run the conductor from a clean "
-                         "checkout of the default branch, not from a branch under review.")
     app_id, key, full_name = _conductor_identity(repo)
     _as_conductor(app_id, key, full_name)
-
-    if args.where == "status":
-        home = github.variable("CONDUCTOR_HOME") or "actions"
-        when, holder = lease.parse(github.variable("CONDUCTOR_LEASE"))
-        age = f", last local pass {int((time.time() - when) / 60)} min ago by {holder or 'unknown'}" if when else ""
-        paused = " (PAUSED)" if github.variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes") else ""
-        print(f"conductor runs on: {home}{age}{paused}")
-        return 0
-    if args.where == "away":
-        github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
-        github.gh("workflow", "run", "conductor.yml", check=False)
-        print("handed over to GitHub Actions")
-        return 0
-
-    holder = f"{os.environ['CONDUCTOR_LOCAL_DEVELOPER']}@{socket.gethostname()}:{os.getpid()}"
-    # Local sandboxes clone this repository, but are set up by the scripts on the
-    # default branch, never by whatever branch happens to be checked out here.
+    # Local sandboxes clone this repository. Specs, sprint and policy are read from a
+    # fresh checkout of the default branch, never from the working tree.
     os.environ["AGENT_PROJECT_DIR"] = str(repo)
 
     if args.dry_run:
-        # One pass that prints the plan. It does not take the lease or touch any
-        # variable, so GitHub Actions keeps running as it was.
-        trusted = lease.fresh_main_checkout(repo)
-        os.environ["AGENTCTL_TRUSTED_SCRIPTS"] = str(trusted)
-        return 1 if _reconcile_once(trusted, True) else 0
+        return 1 if _reconcile_once(local.fresh_main_checkout(repo), True) else 0
 
-    def mine() -> bool:
-        return lease.still_mine(github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE"), holder)
-
-    def renew() -> None:
-        github.gh("variable", "set", "CONDUCTOR_LEASE", "--body", f"{int(time.time())} {holder}")
-
-    # Publish the lease before claiming the role, so that Actions never sees
-    # "local" together with a stale lease and takes over at once.
-    renew()
-    github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "local")
-    print(f"conductor is running here as {os.environ['CONDUCTOR_BOT']}, every {args.interval}s. Ctrl-C hands over to GitHub Actions.")
+    lock = local.single_instance(repo)  # held until the conductor stops
+    print(f"conductor is running here as {os.environ['CONDUCTOR_BOT']}, every {args.interval}s. Ctrl-C stops it.")
     failures = 0
     try:
         while True:
             try:
                 _as_conductor(app_id, key, full_name)
-                if not mine():
-                    print("another conductor holds the lease; stopping")
-                    return 0
-                trusted = lease.fresh_main_checkout(repo)
-                os.environ["AGENTCTL_TRUSTED_SCRIPTS"] = str(trusted)
-                failed = _reconcile_once(trusted, False, guard=mine)
+                trusted = local.fresh_main_checkout(repo)
+                failed = _reconcile_once(trusted, False)
             except (subprocess.CalledProcessError, OSError, SystemExit) as exc:
                 print(f"pass failed: {exc}")
                 failed = 1
-            # Renew only after a pass that worked. A conductor that keeps failing must
-            # not keep Actions standing down while nothing advances.
             failures = failures + 1 if failed else 0
-            if failures == 0:
-                # The pass may have stopped early because the lease moved. Renewing
-                # then would take it back from whoever holds it now.
-                if not mine():
-                    print("another conductor holds the lease; stopping")
-                    return 0
-                renew()
-            elif failures >= 3:
-                github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions", check=False)
-                print("three passes in a row failed; handed over to GitHub Actions")
-                return 1
-            time.sleep(args.interval)
+            if failures >= BACKOFF_AFTER:
+                print(f"{failures} passes in a row failed; next pass in {BACKOFF_SECONDS // 60} minutes")
+            time.sleep(BACKOFF_SECONDS if failures >= BACKOFF_AFTER else args.interval)
     except KeyboardInterrupt:
-        github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions", check=False)
-        github.gh("workflow", "run", "conductor.yml", check=False)
-        print("\nhanded over to GitHub Actions")
+        print("\nconductor stopped; nothing advances until it runs again")
         return 0
+    finally:
+        lock.close()
 
 
 def cmd_app_token(args) -> int:
@@ -392,9 +289,13 @@ def cmd_stage_profile(args) -> int:
 
 def cmd_budget(args) -> int:
     """Estimate month-to-date Actions spend and move heavy CI when it nears the allowance."""
+    return _budget(_root(), args.dry_run)
+
+
+def _budget(root: Path, dry_run: bool) -> int:
     from . import github
 
-    cfg = budget.settings(_toml(_root() / "policy/conductor.toml"))
+    cfg = budget.settings(_toml(root / "policy/conductor.toml"))
     repo = github.gh_json("repo", "view", "--json", "nameWithOwner")["nameWithOwner"]
     try:
         usage = json.loads(github.gh("variable", "get", "ACTIONS_USAGE", check=False) or "null")
@@ -412,7 +313,7 @@ def cmd_budget(args) -> int:
     usage = budget.accumulate(usage, jobs, now, cfg)
     runner, reason = budget.choose_runner(usage, cfg)
     print(budget.summary(usage, runner, cfg))
-    if not args.dry_run:
+    if not dry_run:
         github.gh("variable", "set", "ACTIONS_USAGE", "--body", json.dumps(usage))
         current = github.gh("variable", "get", "CI_RUNNER", check=False).strip()
         if current != runner:
@@ -515,9 +416,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--branch")
     p.set_defaults(func=cmd_redgreen_judge)
 
-    p = sub.add_parser("conductor", help="run the conductor in this terminal (here), hand it to Actions (away), or show where it runs")
-    p.add_argument("where", choices=["here", "away", "status"])
-    p.add_argument("--interval", type=int, default=180, help="seconds between passes when running here")
+    p = sub.add_parser("conductor", help="run the conductor in this terminal; --dry-run prints one pass's plan")
+    p.add_argument("--interval", type=int, default=180, help="seconds between passes")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_conductor)
 
@@ -560,11 +460,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("story")
     p.add_argument("--junit", nargs="+", required=True)
     p.set_defaults(func=cmd_evidence)
-
-    p = sub.add_parser("reconcile", help="conductor: observe GitHub and dispatch the next actions")
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--respect-lease", action="store_true", help="stand down while a local conductor holds the lease")
-    p.set_defaults(func=cmd_reconcile)
 
     p = sub.add_parser("status", help="deterministic sprint summary used by the director's brief")
     p.add_argument("--markdown", action="store_true")

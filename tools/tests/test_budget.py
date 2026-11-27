@@ -1,9 +1,10 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from agentctl import budget, docs, lease
+from agentctl import budget, docs, local
 
 CFG = budget.settings(None)
 NOV = 1795000000.0  # 2026-11-18T...Z
@@ -67,28 +68,32 @@ class RunnerChoiceTests(unittest.TestCase):
         self.assertEqual(cfg["price_per_minute"], {"standard": 0.01, "light": 0.002, "arm": 0.005})
 
 
-class LeaseTests(unittest.TestCase):
-    def test_actions_runs_unless_a_local_conductor_holds_a_fresh_lease(self):
-        now = 10_000.0
-        self.assertEqual(lease.decide("", "", now, 20), "run")
-        self.assertEqual(lease.decide("actions", str(now), now, 20), "run")
-        self.assertEqual(lease.decide("local", str(now - 60), now, 20), "skip")
-        self.assertEqual(lease.decide("local", str(now - 21 * 60), now, 20), "takeover")
-        self.assertEqual(lease.decide("local", "", now, 20), "takeover")
-        self.assertEqual(lease.decide("local", f"{now - 60} mac:123", now, 20), "skip")
-
-    def test_a_local_conductor_stops_when_the_lease_names_someone_else(self):
-        self.assertTrue(lease.still_mine("local", "100 mac:1", "mac:1"))
-        self.assertFalse(lease.still_mine("local", "100 mac:2", "mac:1"))   # a second local process took it
-        self.assertFalse(lease.still_mine("actions", "100 mac:1", "mac:1"))  # Actions took over
-        self.assertFalse(lease.still_mine("local", "", "mac:1"))
+class LocalTests(unittest.TestCase):
+    def test_only_one_conductor_per_project_on_a_mac(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            subprocess.run(["git", "-C", tmp, "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
+            saved = os.environ.get("XDG_STATE_HOME")
+            os.environ["XDG_STATE_HOME"] = str(Path(tmp) / "state")
+            try:
+                first = local.single_instance(Path(tmp))
+                with self.assertRaises(SystemExit):
+                    local.single_instance(Path(tmp))
+                first.close()
+                local.single_instance(Path(tmp)).close()  # free again once the first one ends
+            finally:
+                if saved is None:
+                    os.environ.pop("XDG_STATE_HOME", None)
+                else:
+                    os.environ["XDG_STATE_HOME"] = saved
 
     def test_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".env.conductor"
             path.write_text('# comment\nCLAUDE_TRIGGER_URL="https://x"\nBAD LINE\nA=b=c\n', encoding="utf-8")
-            self.assertEqual(lease.load_env_file(path), {"CLAUDE_TRIGGER_URL": "https://x", "A": "b=c"})
-            self.assertEqual(lease.load_env_file(Path(tmp) / "none"), {})
+            self.assertEqual(local.load_env_file(path), {"CLAUDE_TRIGGER_URL": "https://x", "A": "b=c"})
+            self.assertEqual(local.load_env_file(Path(tmp) / "none"), {})
 
 
 class DocsLintTests(unittest.TestCase):

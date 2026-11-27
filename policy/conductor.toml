@@ -23,10 +23,6 @@ draft_next_sprint_at = 0.8
 # T2 always needs a human approval and is never listed here.
 auto_merge_tiers = []
 
-# How long a local conductor (`agentctl conductor here`) may go silent before the
-# scheduled GitHub Actions run takes over. Covers a laptop closed without handing over.
-local_lease_minutes = 20
-
 [stage_timeout_minutes]
 default = 90
 design = 45
