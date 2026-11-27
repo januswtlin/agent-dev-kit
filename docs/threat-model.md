@@ -25,13 +25,13 @@ Each row is a class of incident that has really happened or can be expected, map
 | 3 | The agent uses cloud credentials on the machine | Directories such as `~/.aws` do not exist in the VM | Deny rules block the cloud CLIs |
 | 4 | Prompt injection (repo content, issues, web pages, package descriptions) induces the agent to send data out | Egress allowlist; the VM holds no secrets worth sending out, apart from the subscription login state and the agent token | AGENTS.md rule 7 |
 | 5 | The agent installs a malicious or non-existent package (slopsquatting, compromised packages) | Dependency changes are always T2 and need human approval to merge; installation happens inside the VM; the egress allowlist limits calls back out | AGENTS.md rule 5 |
-| 6 | The agent pushes straight to main, force-pushes or deletes branches | Ruleset: main can only be changed through a PR; the agent is a machine user with Write permission and no bypass | Guard hook; deny rules |
+| 6 | The agent pushes straight to main, force-pushes or deletes branches | Ruleset: main can only be changed through a PR; the agent acts as a GitHub App with only the permissions it was granted and no bypass | Guard hook; deny rules |
 | 7 | The agent modifies CI to make the checks pass | The agent token has no Workflows permission; `.github/` is in CODEOWNERS; the checks use the base branch's tools and policy | AGENTS.md rule 3 |
 | 8 | The agent weakens the risk rules, prompts or tools | `policy/`, `prompts/` and `tools/` are in CODEOWNERS and are T2 | As above |
 | 9 | The agent claims to have written tests but has not, or has written empty tests | `spec-verify`: traceability (based on execution results) and red-green | The review agent's faithfulness audit |
 | 10 | The agent modifies or deletes tests to suit the implementation | Specs are protected by CODEOWNERS; a TC that has passed may not disappear; red-green | The review agent checks, one by one, every test change made after the tests stage |
 | 11 | The agent quietly changes the requirements | `docs/specs/` is in CODEOWNERS; a new push invalidates earlier approvals | |
-| 12 | The agent approves or merges its own PR | The agent account is not a code owner; PRs are opened by the Conductor App; the App cannot approve | Deny rules block `gh pr merge` |
+| 12 | The agent approves or merges its own PR | The agent's GitHub App cannot be a code owner; PRs are opened by the Conductor App; the App cannot approve | Deny rules block `gh pr merge` |
 | 13 | The agent forges the `agent-review` result | The agent token has no commit status permission; the Claude review is written by a workflow job | See the explanation in guideline 4: this is the weakest link, and the hard guarantees do not depend on it |
 | 14 | The agent deploys or creates a release on its own | Tag ruleset: only an admin can create `v*`; the cloud trusts only OIDC that comes from a tag; there are no long-lived keys | |
 | 15 | The agent deletes the production database or its backups | The agent and CI have no production credentials; the deploy role has no permission to delete backups; migrations are T2 | |

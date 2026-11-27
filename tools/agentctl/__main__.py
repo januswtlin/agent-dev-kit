@@ -12,7 +12,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import budget, docs, doctor, lease, redgreen, risk, specs, trace
+from . import apptoken, budget, docs, doctor, lease, redgreen, risk, specs, trace
 
 
 def _root() -> Path:
@@ -213,6 +213,28 @@ def cmd_conductor(args) -> int:
         return 0
 
 
+def cmd_app_token(args) -> int:
+    """Print a short-lived token for this developer's agent GitHub App."""
+    app_id = args.app_id or os.environ.get("AGENT_APP_ID")
+    key = args.key or os.environ.get("AGENT_APP_KEY")
+    if not app_id or not key:
+        print("set AGENT_APP_ID and AGENT_APP_KEY (path to the App's private key)", file=sys.stderr)
+        return 1
+    repo = args.repo
+    if not repo:
+        remote = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+        repo = apptoken.repo_from_remote(remote)
+    if not repo:
+        print("cannot tell which repository this is; pass --repo owner/name", file=sys.stderr)
+        return 1
+    token = apptoken.installation_token(app_id, key, repo)
+    if args.git_credential:
+        print(f"username=x-access-token\npassword={token}")
+    else:
+        print(token)
+    return 0
+
+
 def cmd_budget(args) -> int:
     """Estimate month-to-date Actions spend and move heavy CI when it nears the allowance."""
     from . import github
@@ -342,6 +364,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--interval", type=int, default=180, help="seconds between passes when running here")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_conductor)
+
+    p = sub.add_parser("app-token", help="print a short-lived token for the agent's GitHub App")
+    p.add_argument("--app-id")
+    p.add_argument("--key", help="path to the App's private key")
+    p.add_argument("--repo", help="owner/name (defaults to the origin remote)")
+    p.add_argument("--git-credential", action="store_true", help="output in git credential-helper format")
+    p.set_defaults(func=cmd_app_token)
 
     p = sub.add_parser("budget", help="estimate this month's Actions spend; move heavy CI to self-hosted near the allowance")
     p.add_argument("--dry-run", action="store_true")

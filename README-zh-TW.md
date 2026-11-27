@@ -3,7 +3,7 @@
 *English: [README.md](README.md)。兩份內容不一致時以英文版為準。*
 
 讓 AI coding agent 在隔離環境中持續開發、由人類擔任 director 的專案 template。
-混用 Claude Code 與 Codex（之後加上 Ollama），只用訂閱，不需要 API key。
+一個人或一個團隊都適用，可任意混用 Claude Code 與 Codex（之後加上 Ollama），只用訂閱，不需要 API key。
 
 兩個目標：
 

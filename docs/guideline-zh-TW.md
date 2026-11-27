@@ -10,7 +10,7 @@
 1. **Agent 碰不到你的私人資料，也造不成不可挽回的破壞。** 依嚴重性：讀取私人檔案（讀了就收不回）、誤刪工作目錄以外的檔案、使用機器上暫時有效的雲端憑證、未來的 production。
 2. **人類注意力是瓶頸。** 你是 director：決定做什麼、核准範圍、放行上線。你不讀一般的 PR、不做 merge、不派工。
 
-團隊現況：兩位開發者，Claude Max 與 ChatGPT 訂閱，不使用按量付費的 API key，GitHub Team 方案。
+對團隊組成不做固定假設。一個人加一種 AI 訂閱就能用；一個人用多種，或多人各自帶不同的 AI 也可以。誰能核准產品決定、每個人的每個 stage 用哪個 harness，都是設定（`policy/roles.toml`、`.github/CODEOWNERS`）。不變的前提只有兩個：agent 用訂閱額度執行，不用按量付費的 API key；repo 所在的 GitHub 方案能在 private repo 上強制 ruleset。
 
 ## 2. 三個原則
 
@@ -73,15 +73,15 @@ Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的�
 
 | 身分 | 是什麼 | 能做 | 不能做 |
 |---|---|---|---|
-| 人類 | 你與同事的 GitHub 帳號，repo admin | 核准 PR、打 release tag、改設定 | 直接 push main（沒有人能） |
-| Agent | 一個 machine user 帳號，Write 權限 | 推 branch、留言、改 label | 開 PR、核准、merge、改 workflow、打 tag、寫 commit status |
-| Conductor | 一個 GitHub App | 開 PR、啟用 auto-merge、派工、通知 | 核准 PR |
+| 人類 | 專案裡的人，repo admin | 核准 PR、打 release tag、改設定 | 直接 push main（沒有人能） |
+| Agent | 每位開發者一個 GitHub App，給他自己的 agent 用 | 推 branch、留言、改 label | 開 PR、核准、merge、改 workflow、打 tag、寫 commit status |
+| Conductor | 一個代表 pipeline 的 GitHub App | 開 PR、啟用 auto-merge、派工、通知 | 核准 PR |
 
-為什麼需要 machine user：token 的權限上限是帳號的權限。用你的 admin 帳號發的 token，即使是 fine-grained，仍繼承 admin 對 ruleset 的 bypass 資格。Agent 用獨立的、只有 Write 權限的帳號，這個問題就不存在。它在 Team 方案佔一個座位。
+為什麼每位開發者的 agent 各用一個 GitHub App：App 的權限就是它被授予的那些，與擁有者的角色無關，所以沒有 admin 的 bypass。它的 token 一小時過期。它不佔座位。而且每人一個，commit 與留言就看得出是誰的 agent 做的；所有人共用一個 App 則看不出來。Personal access token 做不到這些：從 admin 帳號發出的 token，即使是 fine-grained，仍繼承 admin 對 ruleset 的 bypass 資格。`agentctl app-token` 在 VM 內產生這個 token。
 
-為什麼需要 GitHub App：GitHub 不允許作者核准自己的 PR。若雲端 agent 以你的身分開 spec PR，你就無法核准它。所以 agent 只推 branch，由 Conductor App 開 PR。另外，用預設的 `GITHUB_TOKEN` 開的 PR 與做的 merge 不會觸發其他 workflow，gate 根本不會跑。
+為什麼 conductor 是另一個 GitHub App：GitHub 不允許作者核准自己的 PR。若雲端 agent 以你的身分開 spec PR，你就無法核准它。所以 agent 只推 branch，由 Conductor App 開 PR。另外，用預設的 `GITHUB_TOKEN` 開的 PR 與做的 merge 不會觸發其他 workflow，gate 根本不會跑。
 
-雲端 session 的 GitHub 連線，建議連到 machine user 的帳號而非你的個人帳號。這一點需要在 spike 中確認兩家服務是否支援。
+雲端 session 是例外。Claude Code on the web 與 Codex cloud 透過廠商自己的整合存取 GitHub，以你連結的使用者帳號操作，沒有地方可以換成你自己的 App。這裡的預設是連結你的個人帳號。雲端 agent 因此帶著你的身分，它做不到什麼取決於廠商的限制，以及沒有 bypass 的 ruleset。Red-team checklist 的 E 節測的就是這件事：雲端 agent 能否建立 release tag、能否核准 PR。任一項成功時有兩條路：為雲端服務另外連結一個 machine account，代價是多一個座位；或者不走雲端，所有 stage 都改在 self-hosted runner 上執行（`via = "workflow"`），不花錢但機器必須開著。
 
 ## 4. Gate：merge 之前必須成立的事
 
@@ -169,7 +169,15 @@ Stage 7  你打 v* tag → 部署 production                                   �
 
 `policy/roles.toml` 按開發者設定每個 stage 用哪個 harness，並有 fallback 順序。原則是讓審查者與實作者不同廠商。
 
-實際的限制是額度。實作是最耗 token 的 stage。你的 Codex 額度來自 ChatGPT Plus，不足以長時間擔任實作，所以你名下 story 的預設是 Claude 設計、寫測試、實作，Codex 審查。同事只有 ChatGPT Pro，他名下的 story 各 stage 都是獨立的 Codex session；跨廠商的多樣性較弱，由機械檢查承擔主要保證。升級方案後改設定即可。
+實際的限制是額度。實作是最耗 token 的 stage，審查最輕，所以把實作放在一個人較大的訂閱上，審查放在較小的那個。三種常見的組態：
+
+| 組態 | 誰來審查 | 放棄了什麼 |
+|---|---|---|
+| 一人、單一廠商 | 同一個 harness 的全新 session | 跨廠商審查。機械檢查承擔主要保證 |
+| 一人、多廠商 | 與實作者不同的廠商 | 無，只要兩邊額度都夠 |
+| 多人、各自不同的 AI | 視每個人自己有哪些而定 | 只有一種廠商的人，他名下的 story 是同廠商審查 |
+
+不論哪種組態，T2 變更都仍然交給人類。只有一個人時，那個人同時也是 director。升級方案後改設定即可。
 
 ## 6. 持續運轉：Conductor
 
@@ -283,7 +291,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 
 **已在開發時驗證：**
 
-- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 81 個單元測試。
+- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 87 個單元測試。
 - Red-green 在一個真實的 git repo 上端對端執行，分成收集與判定兩步：空測試被擋下，改成真的測試後通過；沒有執行收集步驟時判定為失敗而非通過。
 - Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、留 marker、把 draft 轉為可審、單一動作失敗不影響其他動作；lease 有效時 Actions 端不動作、過期時接手；用量達門檻時改寫 `CI_RUNNER`。
 - Workflow 通過 actionlint，shell script 通過 shellcheck，指令攔截 hook 有測試。
@@ -292,7 +300,8 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 
 - Conductor 對真實 GitHub API 的行為，特別是 issue 相依關聯的 API 與 check 狀態的讀取。
 - 以 API 觸發 Claude 雲端 scheduled task 的實際介面，以及以 `@codex` 留言啟動任意任務是否可行、對留言者身分有何要求。
-- 雲端 session 能否連到 machine user 的 GitHub 帳號。
+- 連結個人 admin 帳號的雲端 session 在 GitHub 上實際能做到什麼（red-team checklist 的 E 節）。
+- 對真實 API 產生 agent App 的 token（`agentctl app-token`）。
 - `anthropics/claude-code-action` 目前的輸入參數；Codex review bot 的帳號名稱與 review 格式。
 - `sandbox/` 下的 Lima 設定與 egress 規則；`sbx` 的指令與行為。
 - `.claude/settings.json` 的 sandbox 與 permission 語法是否符合目前版本。
@@ -308,6 +317,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - VM 內的 worktree 是可寫的，agent 可以毀掉它。已 push 的內容受 GitHub 保護，未 push 的工作可能遺失。
 - VM 內的訂閱登入狀態理論上可被惡意的 repo 內容竊取。Egress allowlist 降低但不消除這個風險。
 - Lima 的 egress 規則以位址過濾，與允許的主機共用位址的其他主機也連得到。
+- 雲端 session 以你連結的個人帳號操作。在跑過 red-team checklist 的 E 節之前，應假設雲端 agent 在 GitHub 上能做到該帳號能做的一切，只受沒有 bypass 的 ruleset 限制。Release tag 的 ruleset 允許 admin bypass，所以它是必測項目之一。
 - 你貼進 PO chat 或 issue 的內容會進入廠商的 context，不在隔離範圍內。
 - 雙語 story 的語意一致性沒有硬性保證。你核准的中文與 agent 實作的英文若有出入，只有 review agent 與你自己能發現。
 - 測試結果由 PR 的程式碼產生，可以被偽造。見第 4 節。

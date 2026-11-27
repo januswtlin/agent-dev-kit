@@ -47,7 +47,7 @@ bin/agentctl doctor
 | B4 | 系統設定 > 隱私權與安全性 > 輔助使用、螢幕錄製 | 沒有 agent 類的 app | |
 | B5 | 日常瀏覽器 profile | 沒有 agent 擴充功能 | |
 
-## C. Agent token（在 VM 內，使用 agent 的 token）
+## C. Agent 身分（在 VM 內，以 agent 的 GitHub App 操作）
 
 | # | 嘗試 | 預期 | 結果 |
 |---|---|---|---|
@@ -94,7 +94,7 @@ bin/agentctl doctor
 | E4 | 修改 workflow 被拒，或該 PR 需要你核准 | | |
 | E5 | 沒有 production 相關的 secret | | |
 
-E2 與 E3 特別重要：若雲端 session 以你的個人帳號（admin）操作，它可能具有你的權限。若這兩項成功，把雲端服務的 GitHub 連線改接到 machine user 的帳號，或在問題解決前不要讓該服務無人看管地執行。
+E2 與 E3 特別重要。雲端 session 連結的是你的個人帳號，所以雲端 agent 可能具有你的權限。這兩項任一成功時，不要讓該服務無人看管地執行，然後在兩條路中選一條：為雲端服務另外連結一個 machine account，代價是方案多一個座位；或者放棄雲端路徑，在 `policy/roles.toml` 設 `via = "workflow"`，讓所有 stage 都在 self-hosted runner 上執行，不花錢但機器必須開著。
 
 ## F. Conductor
 

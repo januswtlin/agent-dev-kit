@@ -25,13 +25,13 @@
 | 3 | Agent 使用機器上的雲端憑證 | VM 內沒有 `~/.aws` 等目錄 | deny rules 擋雲端 CLI |
 | 4 | Prompt injection（repo 內容、issue、網頁、套件說明）誘使 agent 外送資料 | Egress allowlist；VM 內沒有值得外送的秘密，除了訂閱登入狀態與 agent token | AGENTS.md 第 7 條 |
 | 5 | Agent 安裝惡意或不存在的套件（slopsquatting、被入侵的套件） | 依賴變更一律 T2，需人類核准才能合併；安裝發生在 VM 內；egress allowlist 限制回連 | AGENTS.md 第 5 條 |
-| 6 | Agent 直接 push main、force push、刪 branch | Ruleset：main 只能經 PR；agent 是 Write 權限的 machine user，沒有 bypass | guard hook；deny rules |
+| 6 | Agent 直接 push main、force push、刪 branch | Ruleset：main 只能經 PR；agent 以 GitHub App 的身分操作，只有被授予的權限，沒有 bypass | guard hook；deny rules |
 | 7 | Agent 修改 CI 讓檢查通過 | Agent token 沒有 Workflows 權限；`.github/` 在 CODEOWNERS；檢查使用 base branch 的工具與 policy | AGENTS.md 第 3 條 |
 | 8 | Agent 削弱風險規則、prompt 或工具 | `policy/`、`prompts/`、`tools/` 在 CODEOWNERS，且為 T2 | 同上 |
 | 9 | Agent 聲稱寫了測試但沒有，或寫了空測試 | `spec-verify`：traceability（依執行結果）與 red-green | 審查 agent 對測試有效性的稽核 |
 | 10 | Agent 修改或刪除測試來遷就實作 | Spec 受 CODEOWNERS 保護；已通過的 TC 不得消失；red-green | 審查 agent 逐一檢查測試階段之後的測試變更 |
 | 11 | Agent 悄悄更改需求 | `docs/specs/` 在 CODEOWNERS；新的 push 使舊核准失效 | |
-| 12 | Agent 核准或合併自己的 PR | Agent 帳號不是 code owner；PR 由 Conductor App 開啟；App 不能核准 | deny rules 擋 `gh pr merge` |
+| 12 | Agent 核准或合併自己的 PR | Agent 的 GitHub App 不可能是 code owner；PR 由 Conductor App 開啟；App 不能核准 | deny rules 擋 `gh pr merge` |
 | 13 | Agent 偽造 `agent-review` 的結果 | Agent token 沒有 commit status 權限；Claude review 由 workflow job 寫入 | 見 guideline 4 的說明：這是最弱的一環，硬性保證不依賴它 |
 | 14 | Agent 自行部署或建立 release | Tag ruleset：`v*` 只有 admin 能建；雲端只信任來自 tag 的 OIDC；沒有長期金鑰 | |
 | 15 | Agent 刪除 production 資料庫或備份 | Agent 與 CI 沒有 production 憑證；部署角色沒有刪除備份的權限；migration 為 T2 | |

@@ -2,30 +2,32 @@
 # (require_code_owner_review). Everything not listed here can merge on green gates.
 #
 # Keep in sync with policy/risk-tiers.toml ([t2] guardrails, human_gated, high_risk).
-# Agents use a separate machine account, which must never be listed as an owner.
+# Only people are owners. An agent's GitHub App can never be one.
+# `scripts/init.sh` fills in the owner placeholder below. Product paths belong to the director(s);
+# for the other paths you may list any human on the project.
 
 # Product decisions: specs, sprints, product documents.
-/docs/specs/        @januswtlin
-/docs/sprints/      @januswtlin
-/docs/product/      @januswtlin
+/docs/specs/        @DIRECTOR_LOGIN
+/docs/sprints/      @DIRECTOR_LOGIN
+/docs/product/      @DIRECTOR_LOGIN
 
 # The guardrails themselves.
-/.github/           @januswtlin
-/policy/            @januswtlin
-/tools/             @januswtlin
-/bin/               @januswtlin
-/scripts/           @januswtlin
-/sandbox/           @januswtlin
-/prompts/           @januswtlin
-/.claude/           @januswtlin
-/codex/             @januswtlin
-/AGENTS.md          @januswtlin
-/CLAUDE.md          @januswtlin
-/Makefile           @januswtlin
+/.github/           @DIRECTOR_LOGIN
+/policy/            @DIRECTOR_LOGIN
+/tools/             @DIRECTOR_LOGIN
+/bin/               @DIRECTOR_LOGIN
+/scripts/           @DIRECTOR_LOGIN
+/sandbox/           @DIRECTOR_LOGIN
+/prompts/           @DIRECTOR_LOGIN
+/.claude/           @DIRECTOR_LOGIN
+/codex/             @DIRECTOR_LOGIN
+/AGENTS.md          @DIRECTOR_LOGIN
+/CLAUDE.md          @DIRECTOR_LOGIN
+/Makefile           @DIRECTOR_LOGIN
 
 # High-risk code. Adjust once the code layout exists.
-**/auth/**          @januswtlin
-**/payments/**      @januswtlin
-**/billing/**       @januswtlin
-**/migrations/**    @januswtlin
-/infra/             @januswtlin
+**/auth/**          @DIRECTOR_LOGIN
+**/payments/**      @DIRECTOR_LOGIN
+**/billing/**       @DIRECTOR_LOGIN
+**/migrations/**    @DIRECTOR_LOGIN
+/infra/             @DIRECTOR_LOGIN

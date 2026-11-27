@@ -71,9 +71,10 @@ jobs:
           CONDUCTOR_HOME: ${{ vars.CONDUCTOR_HOME }}
           CONDUCTOR_LEASE: ${{ vars.CONDUCTOR_LEASE }}
           CONDUCTOR_QUOTA: ${{ vars.CONDUCTOR_QUOTA }}
-          CLAUDE_TRIGGER_URL: ${{ secrets.CLAUDE_TRIGGER_URL }}
-          CLAUDE_TRIGGER_TOKEN: ${{ secrets.CLAUDE_TRIGGER_TOKEN }}
-          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # Dispatch credentials are per developer (CLAUDE_TRIGGER_URL_<LOGIN>, ...), so
+          # the whole secrets context is handed over. This job only runs code from the
+          # default branch.
+          CONDUCTOR_SECRETS: ${{ toJSON(secrets) }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then bin/agentctl reconcile --respect-lease --dry-run; else bin/agentctl reconcile --respect-lease; fi

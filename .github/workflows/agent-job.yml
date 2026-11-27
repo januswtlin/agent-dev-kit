@@ -7,8 +7,11 @@ name: agent-job
 # This is the supplementary path. Cloud sessions are the primary one, because
 # they keep working with the laptop closed. Ollama stages always come here.
 #
-# The runner is logged in to Claude Code and Codex with the developer's own
-# subscription. It holds the agent token only: no workflow, admin or status scope.
+# Each developer registers the runner in their own VM with the labels
+# `agent-sandbox` and their GitHub login, so a story runs on its assignee's
+# machine and subscription. The runner is logged in to Claude Code and Codex, and
+# acts on GitHub as that developer's agent GitHub App (no workflow, admin or
+# status permission); see docs/runbook.md.
 
 on:
   workflow_dispatch:
@@ -22,6 +25,10 @@ on:
         required: true
       prompt:
         required: true
+      developer:
+        description: GitHub login of the developer whose runner and subscription to use
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -32,22 +39,23 @@ concurrency:
 
 jobs:
   run:
-    runs-on: [self-hosted, agent-sandbox]
+    runs-on: ${{ fromJSON(inputs.developer != '' && format('["self-hosted","agent-sandbox","{0}"]', inputs.developer) || '["self-hosted","agent-sandbox"]') }}
     timeout-minutes: 120
     env:
       PROMPT: ${{ inputs.prompt }}
       HARNESS: ${{ inputs.harness }}
-      GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
       OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || 'devstral' }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.AGENT_TOKEN }}
+          # Pushes use the agent App's own credentials (configured in the VM), not the job token.
+          persist-credentials: false
       - name: Refuse to run outside the sandbox
         run: bin/agentctl doctor --inside
       - name: Run the stage
         run: |
+          GH_TOKEN="$(bin/agentctl app-token)"; export GH_TOKEN
           case "$HARNESS" in
             claude) claude -p "$PROMPT" --permission-mode bypassPermissions ;;
             codex)  codex exec --sandbox danger-full-access "$PROMPT" ;;

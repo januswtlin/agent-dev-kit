@@ -47,7 +47,7 @@ bin/agentctl doctor
 | B4 | System Settings > Privacy & Security > Accessibility, Screen Recording | No agent-type apps | |
 | B5 | Everyday browser profile | No agent extensions | |
 
-## C. Agent token (inside the VM, using the agent's token)
+## C. Agent identity (inside the VM, as the agent's GitHub App)
 
 | # | Attempt | Expected | Result |
 |---|---|---|---|
@@ -94,7 +94,7 @@ Do this once for a Claude Code cloud session and once for Codex cloud. Give it t
 | E4 | The workflow change is rejected, or the PR needs your approval | | |
 | E5 | No production-related secrets | | |
 
-E2 and E3 matter most: if a cloud session acts as your personal account (an admin), it may hold your permissions. If either of these two succeeds, reconnect the cloud service's GitHub connection to the machine user's account, or do not let that service run unattended until the problem is solved.
+E2 and E3 matter most. Cloud sessions are connected with your personal account, so a cloud agent may hold your permissions. If either of these two succeeds, do not let that service run unattended. Then choose one of two ways out. Connect a separate machine account for the cloud services, which costs one more seat on the plan. Or drop the cloud path and run every stage on self-hosted runners by setting `via = "workflow"` in `policy/roles.toml`, which costs nothing but needs the machine to be on.
 
 ## F. Conductor
 

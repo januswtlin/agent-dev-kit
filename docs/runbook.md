@@ -7,9 +7,9 @@ Anything marked **To verify** is a part of this template that has not yet been r
 
 ## 0. What you need
 
-- A GitHub organization on the Team plan, with three seats: you, your colleague, and a machine user for the agents.
-- Your Claude Max and ChatGPT subscriptions; your colleague's ChatGPT subscription. No API key is needed.
-- On the Mac: Homebrew, `gh`, and Lima (or Docker Sandboxes).
+- A GitHub organization on a plan that enforces rulesets on private repos (Team or above), with one seat per person. Agents and the conductor are GitHub Apps and take no seat.
+- At least one AI coding subscription for each person whose stories agents will work on, for example Claude Max or ChatGPT. No API key is needed.
+- On each person's Mac: Homebrew, `gh`, and Lima (or Docker Sandboxes).
 
 ## 1. Create the project repo
 
@@ -19,7 +19,13 @@ On GitHub, use this repo as a template to create a new private repo under the or
 mkdir -p ~/dev && cd ~/dev && gh repo clone OWNER/REPO
 ```
 
-Replace `januswtlin` and `developer-two` with the real GitHub accounts in these files: `.github/CODEOWNERS`, `policy/roles.toml`.
+Fill in who is on the project. The first login is the director, who approves product decisions. Every login given can approve a T2 change. One person is enough:
+
+```bash
+scripts/init.sh DIRECTOR_LOGIN OTHER_LOGIN
+```
+
+Then open `policy/roles.toml` and set, for each person, which harness does which stage. The file has examples for one vendor, two vendors and a local model.
 
 Confirm:
 
@@ -29,20 +35,18 @@ make lint && make test
 
 ## 2. Three kinds of identity
 
-### 2.1 Machine user (the agents' identity)
+### 2.1 Agent GitHub App (one per developer)
 
-1. Register a new GitHub account, for example `yourname-agent`. GitHub allows one machine account per person.
-2. Invite it to the repo as a collaborator with the **Write** role. Do not give it Maintain or Admin.
-3. Sign in as this account and create two fine-grained personal access tokens, both limited to this one repo:
+Each developer creates a GitHub App for their own agents, so that a commit or a comment shows whose agent made it. Under your account's Settings > Developer settings > GitHub Apps:
 
-| Token | Permissions | Purpose |
-|---|---|---|
-| `AGENT_TOKEN` | Contents: Read and write; Pull requests: Read and write; Issues: Read and write; Metadata: Read | The agent, inside the VM, pushes branches, comments and changes labels |
-| `DISPATCH_TOKEN` | Issues: Read and write; Pull requests: Read and write; Metadata: Read | The conductor starts cloud tasks by commenting |
+- Name it after yourself, for example `yourname-agent`.
+- Repository permissions: Contents: Read and write; Pull requests: Read and write; Issues: Read and write; Metadata: Read. Nothing else. In particular, **not** Workflows, Administration, Commit statuses, Secrets or Variables.
+- Subscribe to no webhooks, and untick Active.
+- After creating it, generate a private key and install the App on this repo only.
 
-For both, do **not** tick Workflows, Administration, Commit statuses or Secrets.
+Keep the App's ID and the private key file. Section 5 puts them in the VM. **To verify**: `agentctl app-token` has not been run against the real API yet.
 
-`DISPATCH_TOKEN` **To verify**: when a comment starts a Codex cloud task, the commenter may have to be a user with a linked ChatGPT account. If so, this token must be issued from your own account instead, with the permissions in the table above.
+To start cloud tasks by commenting, each developer also needs one personal token, `DISPATCH_TOKEN`: a fine-grained personal access token limited to this repo, with Issues: Read and write; Pull requests: Read and write; Metadata: Read. It comes from the developer's own account because the comment may have to be made by the user whose ChatGPT account is linked (**To verify**).
 
 ### 2.2 Conductor GitHub App
 
@@ -61,25 +65,24 @@ In the repo's Settings > Secrets and variables > Actions:
 
 ### 2.3 Humans
 
-You and your colleague are repo admins. In the organization's Settings > Actions > General, confirm that **Allow GitHub Actions to create and approve pull requests** is off.
+Everyone on the project is a repo admin. In the organization's Settings > Actions > General, confirm that **Allow GitHub Actions to create and approve pull requests** is off.
 
 ## 3. Secrets and variables
 
 | Type | Name | Source | When it is needed |
 |---|---|---|---|
-| Secret | `AGENT_TOKEN` | 2.1 | When using the self-hosted runner |
 | Secret | `DISPATCH_TOKEN` | 2.1 | When Codex is started by a comment |
 | Secret | `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token` on your machine | Claude review |
 | Secret | `CLAUDE_TRIGGER_URL`, `CLAUDE_TRIGGER_TOKEN` | The scheduled task created in section 6 | Claude cloud sessions |
 | Variable | `REVIEW_BOTS` | A JSON array of the Codex review bot's accounts, for example `["chatgpt-codex-connector[bot]"]` **To verify** | Codex review |
 | Variable | `CONDUCTOR_PAUSED` | `true` or empty | Kill switch |
-| Variable | `CONDUCTOR_QUOTA` | JSON, for example `{"januswtlin/codex": 1795800000}`; the value is the epoch second at which the quota resets | Marking a harness's quota as exhausted by hand |
+| Variable | `CONDUCTOR_QUOTA` | JSON, for example `{"alice/codex": 1795800000}`; the value is the epoch second at which the quota resets | Marking a harness's quota as exhausted by hand |
 | Variable | `OLLAMA_MODEL` | For example `devstral` | When using Ollama |
 | Variable | `LIGHT_RUNNER` | The label of a 1-core runner **To verify**; if unset, `ubuntu-latest` is used | When you want to lower the cost of light jobs |
 | Variable | `CI_RUNNER` | Maintained automatically by `agentctl budget`; no need to set it by hand | Budget overflow |
 | Variable | `CONDUCTOR_HOME`, `CONDUCTOR_LEASE`, `ACTIONS_USAGE` | Maintained automatically by `agentctl` | Where the conductor runs, and the usage estimate |
 
-`CLAUDE_CODE_OAUTH_TOKEN` is tied to your personal subscription. `policy/roles.toml` is already set up so that only stories assigned to you use Claude.
+Secrets that belong to one person's subscription (`DISPATCH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_TRIGGER_URL`, `CLAUDE_TRIGGER_TOKEN`) can be stored per developer by appending the login in upper case, with any other character as `_`: `DISPATCH_TOKEN_ALICE`. The conductor uses the developer's own secret for that developer's stories and falls back to the plain name. With one person, the plain names are enough.
 
 ## 4. Rulesets and repo settings
 
@@ -119,7 +122,7 @@ sandbox/vm.sh up
 sandbox/vm.sh check
 ```
 
-Enter the VM, sign in to the two harnesses, and set the agent's git identity and token:
+Enter the VM, sign in to your harnesses, and set up the agent's GitHub identity:
 
 ```bash
 sandbox/vm.sh shell
@@ -136,14 +139,20 @@ codex login
 ```
 
 ```bash
-gh auth login --with-token
+mkdir -p ~/.config/agent-app && cat > ~/.config/agent-app/key.pem && chmod 600 ~/.config/agent-app/key.pem
 ```
 
-Paste `AGENT_TOKEN`, then press Ctrl-D. Next:
+Paste the private key of your agent App (section 2.1), then press Ctrl-D. Next, with your App's ID in place of `APP_ID` and your App's name in place of `yourname-agent`:
 
 ```bash
-gh auth setup-git && git config --global user.name "yourname-agent" && git config --global user.email "yourname-agent@users.noreply.github.com"
+echo 'export AGENT_APP_ID=APP_ID AGENT_APP_KEY=$HOME/.config/agent-app/key.pem PATH=/workspace/sandbox/bin:$PATH' >> ~/.profile && . ~/.profile
 ```
+
+```bash
+git config --global credential.https://github.com.helper '!/workspace/bin/agentctl app-token --git-credential' && git config --global user.name "yourname-agent[bot]" && git config --global user.email "yourname-agent[bot]@users.noreply.github.com"
+```
+
+From now on, git and `gh` inside the VM act as your agent App. `sandbox/bin/gh` wraps `gh` so that every call uses a fresh one-hour token. The key stays in the VM: if the VM were compromised, what leaks is that App's access to this one repo (push branches, comment, label), and deleting the key in the App's settings revokes it.
 
 Copy the `vm` profile from `codex/config.example.toml` into `~/.codex/config.toml` inside the VM.
 
@@ -163,7 +172,7 @@ For installing the self-hosted runner, see `sandbox/runner/README.md`. It is opt
 
 ### Claude Code on the web
 
-1. At claude.ai/code, connect GitHub and authorise this repo. If possible, connect the machine user's account (**To verify**).
+1. At claude.ai/code, connect GitHub with your own account and authorise this repo only. A cloud agent then acts as you on GitHub. Section E of the red-team checklist checks what it can do with that; run it before letting cloud sessions work unattended.
 2. Create an environment: set the network to restricted and add no secrets.
 3. Create a scheduled task, choose API as the trigger, and set the prompt to "Carry out the instructions in the message you receive". Store its trigger URL and token as `CLAUDE_TRIGGER_URL` and `CLAUDE_TRIGGER_TOKEN`.
 
@@ -229,13 +238,13 @@ auto_merge_tiers = ["T0"]
 
 After a further while, add `"T1"`. A change to this file is itself T2 and needs your approval.
 
-## 10. Your colleague joins
+## 10. Adding a person
 
 1. They join the organization and become a repo admin.
-2. In `policy/roles.toml`, replace `developer-two` with their account. If they are also to approve particular paths, add them to `.github/CODEOWNERS` and `humans`.
-3. They do section 5 on their own Mac and connect the repo in Codex cloud.
-4. For stories assigned to them: set them as the assignee on the story issue, and the conductor will use their harness configuration and their subscription.
-5. Product decisions are still approved by you alone: the owners of `docs/specs/`, `docs/sprints/` and `docs/product/` list only you.
+2. In `policy/roles.toml`, add them to `humans` and give them a `[developers.LOGIN.stages]` table. In `.github/CODEOWNERS`, add them to the paths they may approve. Add them to `directors` and to the product paths only if they are to approve product decisions.
+3. They create their own agent App and `DISPATCH_TOKEN` (section 2.1), do section 5 on their own Mac, and connect their own accounts to the cloud services (section 6). Their secrets are stored with their login as the suffix (section 3).
+4. For stories assigned to them: set them as the assignee on the story issue, and the conductor will use their harness configuration, their credentials and their subscription.
+5. Product decisions stay with the directors: only they are owners of `docs/specs/`, `docs/sprints/` and `docs/product/`.
 
 ## 11. Day-to-day operation
 

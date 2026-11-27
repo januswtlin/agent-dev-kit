@@ -7,9 +7,9 @@
 
 ## 0. 需要什麼
 
-- GitHub organization，Team 方案，三個座位：你、同事、一個給 agent 用的 machine user。
-- 你的 Claude Max 與 ChatGPT 訂閱；同事的 ChatGPT 訂閱。不需要 API key。
-- Mac 上：Homebrew、`gh`、Lima（或 Docker Sandboxes）。
+- GitHub organization，方案要能在 private repo 上強制 ruleset（Team 以上），每個人一個座位。Agent 與 conductor 都是 GitHub App，不佔座位。
+- 每位名下會有 story 交給 agent 的人，至少一種 AI coding 訂閱，例如 Claude Max 或 ChatGPT。不需要 API key。
+- 每個人的 Mac 上：Homebrew、`gh`、Lima（或 Docker Sandboxes）。
 
 ## 1. 建立專案 repo
 
@@ -19,7 +19,13 @@
 mkdir -p ~/dev && cd ~/dev && gh repo clone OWNER/REPO
 ```
 
-把下列檔案中的 `januswtlin` 與 `developer-two` 換成實際的 GitHub 帳號：`.github/CODEOWNERS`、`policy/roles.toml`。
+填入專案裡有誰。第一個帳號是 director，負責核准產品決定；列出的每個帳號都可以核准 T2 變更。只有一個人也可以：
+
+```bash
+scripts/init.sh DIRECTOR_LOGIN OTHER_LOGIN
+```
+
+接著打開 `policy/roles.toml`，為每個人設定哪個 harness 負責哪個 stage。檔案裡有單一廠商、兩家廠商、加上本地模型的範例。
 
 確認：
 
@@ -29,20 +35,18 @@ make lint && make test
 
 ## 2. 三種身分
 
-### 2.1 Machine user（agent 的身分）
+### 2.1 Agent GitHub App（每位開發者一個）
 
-1. 註冊一個新的 GitHub 帳號，例如 `yourname-agent`。GitHub 允許每人一個 machine account。
-2. 邀請它成為 repo 的 collaborator，角色為 **Write**。不要給 Maintain 或 Admin。
-3. 以這個帳號登入，建立兩個 fine-grained personal access token，都只限這一個 repo：
+每位開發者為自己的 agent 建立一個 GitHub App，這樣 commit 與留言就看得出是誰的 agent 做的。在你個人帳號的 Settings > Developer settings > GitHub Apps：
 
-| Token | 權限 | 用途 |
-|---|---|---|
-| `AGENT_TOKEN` | Contents: Read and write；Pull requests: Read and write；Issues: Read and write；Metadata: Read | Agent 在 VM 內推 branch、留言、改 label |
-| `DISPATCH_TOKEN` | Issues: Read and write；Pull requests: Read and write；Metadata: Read | Conductor 以留言啟動雲端任務 |
+- 以自己命名，例如 `yourname-agent`。
+- Repository permissions：Contents: Read and write；Pull requests: Read and write；Issues: Read and write；Metadata: Read。其他都不要，尤其**不要** Workflows、Administration、Commit statuses、Secrets、Variables。
+- 不訂閱任何 webhook，取消勾選 Active。
+- 建立後產生一把 private key，並把 App 只安裝到這個 repo。
 
-兩者都**不要**勾選 Workflows、Administration、Commit statuses、Secrets。
+留下 App 的 ID 與 private key 檔。第 5 節會把它們放進 VM。**待驗證**：`agentctl app-token` 還沒對真實 API 執行過。
 
-`DISPATCH_TOKEN` **待驗證**：以留言啟動 Codex cloud 任務時，留言者可能必須是連結了 ChatGPT 帳號的使用者。若是如此，這個 token 要改由你本人的帳號發出，權限同上表。
+要以留言啟動雲端任務，每位開發者另外需要一個個人 token `DISPATCH_TOKEN`：只限這個 repo 的 fine-grained personal access token，權限為 Issues: Read and write；Pull requests: Read and write；Metadata: Read。它出自開發者本人的帳號，因為留言者可能必須是連結了 ChatGPT 帳號的使用者（**待驗證**）。
 
 ### 2.2 Conductor GitHub App
 
@@ -61,25 +65,24 @@ make lint && make test
 
 ### 2.3 人類
 
-你與同事是 repo admin。Organization 的 Settings > Actions > General 中，確認 **Allow GitHub Actions to create and approve pull requests** 是關閉的。
+專案裡的每個人都是 repo admin。Organization 的 Settings > Actions > General 中，確認 **Allow GitHub Actions to create and approve pull requests** 是關閉的。
 
 ## 3. Secrets 與 variables
 
 | 類型 | 名稱 | 來源 | 何時需要 |
 |---|---|---|---|
-| Secret | `AGENT_TOKEN` | 2.1 | 使用 self-hosted runner 時 |
 | Secret | `DISPATCH_TOKEN` | 2.1 | Codex 以留言啟動時 |
 | Secret | `CLAUDE_CODE_OAUTH_TOKEN` | 在你的機器上執行 `claude setup-token` | Claude review |
 | Secret | `CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN` | 第 6 節建立的 scheduled task | Claude 雲端 session |
 | Variable | `REVIEW_BOTS` | JSON 陣列，Codex review bot 的帳號，例如 `["chatgpt-codex-connector[bot]"]` **待驗證** | Codex review |
 | Variable | `CONDUCTOR_PAUSED` | `true` 或留空 | Kill switch |
-| Variable | `CONDUCTOR_QUOTA` | JSON，例如 `{"januswtlin/codex": 1795800000}`，值為額度恢復的 epoch 秒 | 手動標記某個 harness 額度用盡 |
+| Variable | `CONDUCTOR_QUOTA` | JSON，例如 `{"alice/codex": 1795800000}`，值為額度恢復的 epoch 秒 | 手動標記某個 harness 額度用盡 |
 | Variable | `OLLAMA_MODEL` | 例如 `devstral` | 使用 Ollama 時 |
 | Variable | `LIGHT_RUNNER` | 1-core runner 的 label **待驗證**；不設則用 `ubuntu-latest` | 想降低輕量 job 的費用時 |
 | Variable | `CI_RUNNER` | 由 `agentctl budget` 自動維護，不需手動設定 | 額度 overflow |
 | Variable | `CONDUCTOR_HOME`、`CONDUCTOR_LEASE`、`ACTIONS_USAGE` | 由 `agentctl` 自動維護 | Conductor 的位置與用量估算 |
 
-`CLAUDE_CODE_OAUTH_TOKEN` 綁定你個人的訂閱。`policy/roles.toml` 已設定成只有你名下的 story 會用到 Claude。
+屬於某個人訂閱的 secret（`DISPATCH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`）可以按開發者分開存放：在名稱後面加上大寫的帳號，其他字元換成 `_`，例如 `DISPATCH_TOKEN_ALICE`。Conductor 處理某位開發者的 story 時先找他專屬的 secret，找不到才用不帶後綴的名稱。只有一個人時，用不帶後綴的名稱就夠了。
 
 ## 4. Rulesets 與 repo 設定
 
@@ -119,7 +122,7 @@ sandbox/vm.sh up
 sandbox/vm.sh check
 ```
 
-進入 VM，登入兩個 harness，並設定 agent 的 git 身分與 token：
+進入 VM，登入你的 harness，並設定 agent 的 GitHub 身分：
 
 ```bash
 sandbox/vm.sh shell
@@ -136,14 +139,20 @@ codex login
 ```
 
 ```bash
-gh auth login --with-token
+mkdir -p ~/.config/agent-app && cat > ~/.config/agent-app/key.pem && chmod 600 ~/.config/agent-app/key.pem
 ```
 
-貼上 `AGENT_TOKEN` 後按 Ctrl-D。接著：
+貼上你的 agent App 的 private key（第 2.1 節）後按 Ctrl-D。接著，把 `APP_ID` 換成你的 App ID、`yourname-agent` 換成你的 App 名稱：
 
 ```bash
-gh auth setup-git && git config --global user.name "yourname-agent" && git config --global user.email "yourname-agent@users.noreply.github.com"
+echo 'export AGENT_APP_ID=APP_ID AGENT_APP_KEY=$HOME/.config/agent-app/key.pem PATH=/workspace/sandbox/bin:$PATH' >> ~/.profile && . ~/.profile
 ```
+
+```bash
+git config --global credential.https://github.com.helper '!/workspace/bin/agentctl app-token --git-credential' && git config --global user.name "yourname-agent[bot]" && git config --global user.email "yourname-agent[bot]@users.noreply.github.com"
+```
+
+之後 VM 內的 git 與 `gh` 都以你的 agent App 的身分操作。`sandbox/bin/gh` 包了一層 `gh`，每次呼叫都用新的一小時 token。Key 留在 VM 內：VM 若被入侵，外洩的是這個 App 對這一個 repo 的存取權（推 branch、留言、改 label），在 App 的設定頁刪除該 key 即可撤銷。
 
 把 `codex/config.example.toml` 的 `vm` profile 複製到 VM 內的 `~/.codex/config.toml`。
 
@@ -163,7 +172,7 @@ Self-hosted runner 的安裝見 `sandbox/runner/README.md`。這是選配，建�
 
 ### Claude Code on the web
 
-1. 在 claude.ai/code 連結 GitHub 並授權這個 repo。若可行，連結的是 machine user 的帳號（**待驗證**）。
+1. 在 claude.ai/code 以你自己的帳號連結 GitHub，只授權這個 repo。雲端 agent 之後在 GitHub 上是以你的身分操作。Red-team checklist 的 E 節檢查它用這個身分能做到什麼；讓雲端 session 無人看管地工作之前先跑過那一節。
 2. 建立一個環境：網路設為受限，不加任何 secret。
 3. 建立一個 scheduled task，觸發方式選 API，prompt 設為「執行收到的訊息中的指示」。把它的觸發 URL 與 token 存成 `CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`。
 
@@ -229,13 +238,13 @@ auto_merge_tiers = ["T0"]
 
 再過一段時間加上 `"T1"`。這個檔案的變更本身是 T2，需要你核准。
 
-## 10. 同事加入
+## 10. 新增一個人
 
 1. 加入 organization，成為 repo admin。
-2. 在 `policy/roles.toml` 把 `developer-two` 換成他的帳號；若他也要核准特定路徑，加進 `.github/CODEOWNERS` 與 `humans`。
-3. 他在自己的 Mac 上做第 5 節，在 Codex cloud 連結 repo。
-4. 他名下的 story：在 story issue 上把 assignee 設為他，conductor 就會用他的 harness 設定與他的訂閱。
-5. 產品決定仍只由你核准：`docs/specs/`、`docs/sprints/`、`docs/product/` 的 owner 只列你。
+2. 在 `policy/roles.toml` 把他加進 `humans`，並給他一個 `[developers.LOGIN.stages]` 區塊。在 `.github/CODEOWNERS` 把他加到他可以核准的路徑。只有在他要核准產品決定時，才加進 `directors` 與產品路徑。
+3. 他建立自己的 agent App 與 `DISPATCH_TOKEN`（第 2.1 節），在自己的 Mac 上做第 5 節，並把自己的帳號連到雲端服務（第 6 節）。他的 secret 以他的帳號為後綴存放（第 3 節）。
+4. 他名下的 story：在 story issue 上把 assignee 設為他，conductor 就會用他的 harness 設定、他的憑證與他的訂閱。
+5. 產品決定仍只由 director 核准：`docs/specs/`、`docs/sprints/`、`docs/product/` 的 owner 只列 director。
 
 ## 11. 日常操作
 

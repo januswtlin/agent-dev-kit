@@ -17,7 +17,7 @@ request code, onto it. Jobs that judge a pull request never come here.
 - The runner is installed in the VM, not on macOS. The VM mounts the project directory only, and its outbound traffic is limited by the allowlist.
 - The runner serves this one private repository. Never register it with a public repository: anyone who opens a pull request could run code on it.
 - Claude Code and Codex in the VM are logged in with your own subscription. Treat `auth.json` and the login state as passwords; they exist only inside the VM.
-- `AGENT_TOKEN`, used by the workflow, is the machine user's fine-grained token. It has no Workflows, Administration or Commit statuses permission.
+- On GitHub the runner acts as your own agent GitHub App, which has no Workflows, Administration or Commit statuses permission. Register the runner with your GitHub login as a label, so that your stories run on your machine and your subscription.
 
 ## Installation
 
@@ -32,7 +32,7 @@ sandbox/vm.sh shell
 The rest runs inside the VM. Get a registration token from the repository's Settings > Actions > Runners > New self-hosted runner (Linux ARM64), download and unpack the runner into `~/actions-runner` as that page says, then:
 
 ```bash
-cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token REGISTRATION_TOKEN --labels agent-sandbox --unattended
+cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token REGISTRATION_TOKEN --labels agent-sandbox,YOUR_LOGIN --unattended
 ```
 
 ```bash

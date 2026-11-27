@@ -20,6 +20,10 @@ on:
       story:
         description: Story id
         required: true
+      developer:
+        description: Whose subscription runs the review (login in upper case, as used in secret names)
+        required: false
+        default: ""
   pull_request_review:
     types: [submitted]
 
@@ -53,7 +57,7 @@ jobs:
             -f state=pending -f context=agent-review -f description="review in progress"
       - uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', inputs.developer)] || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Follow prompts/review.md exactly. Read AGENTS.md first.
             Story: ${{ inputs.story }}. Pull request: #${{ inputs.pr }}. Base: origin/main.

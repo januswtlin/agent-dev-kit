@@ -198,7 +198,8 @@ def collect(repo_root: Path) -> tuple[State, dict]:
     )
     context = {"repo": repo, "sprint": sprint_id, "sprint_issue": sprint_issue["number"],
                "issues": {sid: issue["number"] for sid, issue in issues.items()}, "specs": specs,
-               "prs": {sid: s.pr.number for sid, s in stories.items() if s.pr}}
+               "prs": {sid: s.pr.number for sid, s in stories.items() if s.pr},
+               "assignees": {sid: s.assignee for sid, s in stories.items() if s.assignee != "default"}}
     return state, context
 
 
@@ -223,9 +224,34 @@ def _prompt(action: Action, context: dict) -> str:
     return "\n".join(lines)
 
 
+def developer_key(login: str) -> str:
+    """A GitHub login as it appears in secret names and runner labels: ALICE_SMITH."""
+    return re.sub(r"[^A-Za-z0-9]", "_", login or "").upper()
+
+
+def secret(name: str, developer: str = "") -> str:
+    """A credential for one developer's subscription, falling back to a shared one.
+
+    Each developer's stories run on that developer's own subscriptions, so the
+    trigger URLs and tokens are per developer: NAME_<LOGIN> wins over NAME.
+    On GitHub Actions they arrive together in CONDUCTOR_SECRETS (the secrets
+    context as JSON); in a terminal they come from the environment.
+    """
+    try:
+        pool = json.loads(os.environ.get("CONDUCTOR_SECRETS") or "{}")
+    except json.JSONDecodeError:
+        pool = {}
+    for key in ([f"{name}_{developer_key(developer)}"] if developer else []) + [name]:
+        value = pool.get(key) or os.environ.get(key)
+        if value:
+            return value
+    return ""
+
+
 def _send(action: Action, context: dict, roles: dict) -> None:
     """Hand the work to a harness. `via` is configured per harness in policy/roles.toml."""
     harness = roles.get("harness", {}).get(action.harness, {})
+    developer = context.get("assignees", {}).get(action.story, "")
     via = harness.get("via", "workflow")
     prompt = _prompt(action, context)
     issue = str(context["issues"].get(action.story, context["sprint_issue"]))
@@ -236,23 +262,26 @@ def _send(action: Action, context: dict, roles: dict) -> None:
         pr = gh_json("pr", "list", "--search", f"head:story/{action.story}", "--json", "number", default=[])
         if not pr:
             raise SystemExit(f"story {action.story} has no open pull request to review")
-        gh("workflow", "run", harness["review_workflow"], "-f", f"pr={pr[0]['number']}", "-f", f"story={action.story}")
+        gh("workflow", "run", harness["review_workflow"], "-f", f"pr={pr[0]['number']}", "-f", f"story={action.story}",
+           "-f", f"developer={developer_key(developer)}")
     elif via == "workflow":
         # GitHub-hosted (claude-code-action) or self-hosted runner in the sandbox VM.
         gh("workflow", "run", "agent-job.yml", "-f", f"story={action.story}", "-f", f"stage={action.stage}",
-           "-f", f"harness={action.harness}", "-f", f"prompt={prompt}")
+           "-f", f"harness={action.harness}", "-f", f"prompt={prompt}", "-f", f"developer={developer}")
     elif via == "comment":
         # Cloud agents that start from a mention (for example Codex cloud). The comment
         # must come from the developer whose subscription runs the task.
-        token = os.environ.get(harness.get("token_env", "DISPATCH_TOKEN"))
+        token = secret(harness.get("token_env", "DISPATCH_TOKEN"), developer) or None
         mention = harness.get("mention", "@codex")
         # Once the story has a pull request, the mention goes there so the agent has the diff in context.
         target = str(context.get("prs", {}).get(action.story) or issue)
         gh("issue", "comment", target, "--body", f"{mention} {prompt}", token=token)
     elif via == "http":
         # Cloud scheduled task with an API trigger (for example Claude Code on the web).
-        url = os.environ[harness.get("url_env", "CLAUDE_TRIGGER_URL")]
-        token = os.environ.get(harness.get("token_env", "CLAUDE_TRIGGER_TOKEN"), "")
+        url = secret(harness.get("url_env", "CLAUDE_TRIGGER_URL"), developer)
+        if not url:
+            raise SystemExit(f"no trigger URL configured for harness '{action.harness}'" + (f" and developer '{developer}'" if developer else ""))
+        token = secret(harness.get("token_env", "CLAUDE_TRIGGER_TOKEN"), developer)
         request = urllib.request.Request(
             url, data=json.dumps({"text": prompt}).encode(), method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},

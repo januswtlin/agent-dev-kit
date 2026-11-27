@@ -3,7 +3,7 @@
 *繁體中文：[README-zh-TW.md](README-zh-TW.md). The English version governs if the two differ.*
 
 A project template in which AI coding agents develop continuously inside isolated environments, with a human acting as director.
-It mixes Claude Code and Codex (Ollama to be added later) on subscriptions only. No API key is needed.
+It works for one person or a team, with any mix of Claude Code and Codex (Ollama to be added later), on subscriptions only. No API key is needed.
 
 Two goals:
 

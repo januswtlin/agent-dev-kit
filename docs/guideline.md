@@ -10,7 +10,7 @@ Installation steps are in [runbook.md](runbook.md). Threats and the controls tha
 1. **Agents cannot reach your private data and cannot cause irreversible damage.** In order of severity: reading private files (once read, it cannot be taken back), deleting files outside the working directory by mistake, using temporarily valid cloud credentials on the machine, and, in future, production.
 2. **Human attention is the bottleneck.** You are the director: you decide what to build, approve the scope, and release to production. You do not read ordinary PRs, merge, or dispatch work.
 
-The team today: two developers, Claude Max and ChatGPT subscriptions, no pay-as-you-go API keys, GitHub Team plan.
+It assumes nothing fixed about the team. One person with one AI subscription is enough. So is one person with several, or several people who each bring their own. Who may approve product decisions, and which harness does which stage for each person, are settings (`policy/roles.toml`, `.github/CODEOWNERS`). Only two things are constant: agents run on subscriptions, with no pay-as-you-go API keys, and the repo is on a GitHub plan that enforces rulesets on private repos.
 
 ## 2. Three principles
 
@@ -73,15 +73,15 @@ Three identities, with separate permissions:
 
 | Identity | What it is | Can | Cannot |
 |---|---|---|---|
-| Human | The GitHub accounts of you and your colleague, repo admin | Approve PRs, push release tags, change settings | Push directly to main (nobody can) |
-| Agent | A machine user account with Write permission | Push branches, comment, change labels | Open PRs, approve, merge, change workflows, create tags, write commit statuses |
-| Conductor | A GitHub App | Open PRs, enable auto-merge, dispatch work, notify | Approve PRs |
+| Human | The people on the project, repo admins | Approve PRs, push release tags, change settings | Push directly to main (nobody can) |
+| Agent | A GitHub App per developer, for that developer's agents | Push branches, comment, change labels | Open PRs, approve, merge, change workflows, create tags, write commit statuses |
+| Conductor | One GitHub App for the pipeline | Open PRs, enable auto-merge, dispatch work, notify | Approve PRs |
 
-Why a machine user is needed: a token's permissions are capped by the account's permissions. A token issued from your admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. With the agent on a separate account that has only Write permission, the problem does not exist. It takes up one seat on the Team plan.
+Why each developer's agents get their own GitHub App: an App has exactly the permissions it was granted, whatever its owner's role, so it carries no admin bypass. Its tokens expire after an hour. It takes no seat. And because there is one per developer, a commit or a comment shows whose agent made it; a single App shared by everyone would hide that. A personal access token cannot do the same: a token issued from an admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. `agentctl app-token` mints the token inside the VM.
 
-Why a GitHub App is needed: GitHub does not let an author approve their own PR. If a cloud agent opened a spec PR under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the PR. In addition, PRs opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all.
+Why the conductor is a separate GitHub App: GitHub does not let an author approve their own PR. If a cloud agent opened a spec PR under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the PR. In addition, PRs opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all.
 
-For the GitHub connection of cloud sessions, connecting to the machine user's account rather than your personal account is recommended. Whether the two services support this needs to be confirmed in the spike.
+Cloud sessions are the exception. Claude Code on the web and Codex cloud reach GitHub through the vendor's own integration, acting as the user account you connect; you cannot put your own App in its place. The default here is to connect your personal account. A cloud agent then acts with your identity, and what it cannot do depends on the vendor's limits and on rulesets that have no bypass. Section E of the red-team checklist tests exactly this: whether a cloud agent can create a release tag or approve a pull request. If either succeeds, there are two ways out. Connect a separate machine account for the cloud services, which costs one more seat. Or stop using the cloud path and run every stage on self-hosted runners (`via = "workflow"`), which costs nothing but needs the machine to be on.
 
 ## 4. Gates: what must hold before a merge
 
@@ -169,7 +169,15 @@ You approve by approving that PR on GitHub. The mobile app is enough. Labels are
 
 `policy/roles.toml` sets, per developer, which harness each stage uses, with a fallback order. The principle is for the reviewer and the implementer to be from different vendors.
 
-The practical constraint is quota. Implementation is the most token-hungry stage. Your Codex quota comes from ChatGPT Plus, which is not enough to act as implementer for long periods. So the default for stories under your name is Claude for design, tests and implementation, with Codex reviewing. Your colleague has only ChatGPT Pro, so every stage of the stories under his name is a separate Codex session. Cross-vendor diversity is weaker there, and the mechanical checks carry the main guarantee. After a plan upgrade, changing the settings is all that is needed.
+The practical constraint is quota. Implementation is the most token-hungry stage and review the lightest, so put implementation on a person's larger subscription and review on the smaller one. Three common setups:
+
+| Setup | Who reviews | What you give up |
+|---|---|---|
+| One person, one vendor | A fresh session of the same harness | Cross-vendor review. The mechanical checks carry the main guarantee |
+| One person, several vendors | A different vendor from the implementer | Nothing, as long as quota lasts on both |
+| Several people, each with their own AI | Whatever each person's own set allows | People with one vendor get same-vendor review on their stories |
+
+In every setup a T2 change still goes to a human. With one person, that human is also the director. After a plan upgrade, changing the settings is all that is needed.
 
 ## 6. Continuous operation: the conductor
 
@@ -283,7 +291,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 
 **Verified during development:**
 
-- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 81 unit tests in total.
+- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 87 unit tests in total.
 - Red-green was run end to end on a real git repo, split into two steps, collect and judge: an empty test was blocked, and passed after being changed into a real test. When the collect step was not run, the judgement was fail rather than pass.
 - The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving markers, marking a draft ready for review, a single failed action not affecting the others. While the lease is valid the Actions side does not act, and it takes over when the lease expires. When usage reaches the threshold it rewrites `CI_RUNNER`.
 - The workflows pass actionlint, the shell scripts pass shellcheck, and the command-blocking hook has tests.
@@ -292,7 +300,8 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 
 - The conductor's behaviour against the real GitHub API, in particular the API for issue dependency links and the reading of check status.
 - The actual interface for triggering a Claude cloud scheduled task by API, and whether starting an arbitrary task with an `@codex` comment is feasible and what it requires of the commenter's identity.
-- Whether cloud sessions can connect to the machine user's GitHub account.
+- What a cloud session connected to a personal admin account can do on GitHub (section E of the red-team checklist).
+- Minting an agent App token against the real API (`agentctl app-token`).
 - The current input parameters of `anthropics/claude-code-action`; the account name of the Codex review bot and its review format.
 - The Lima configuration and egress rules under `sandbox/`; the commands and behaviour of `sbx`.
 - Whether the sandbox and permission syntax in `.claude/settings.json` matches the current version.
@@ -308,6 +317,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 - The worktree inside the VM is writable, and an agent can destroy it. Pushed content is protected by GitHub; unpushed work may be lost.
 - The subscription login state inside the VM could in theory be stolen by malicious repo content. The egress allowlist reduces this risk but does not remove it.
 - Lima's egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
+- Cloud sessions act as the personal account you connect. Until section E of the red-team checklist has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test.
 - What you paste into the PO chat or an issue enters the vendor's context and is outside the isolation.
 - There is no hard guarantee that the two language versions of a story mean the same thing. If the Chinese you approved and the English the agents implement differ, only the review agent and you yourself can catch it.
 - Test results are produced by the PR's code and can be forged. See section 4.

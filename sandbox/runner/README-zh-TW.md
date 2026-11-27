@@ -14,7 +14,7 @@
 - Runner 裝在 VM 裡，不是裝在 macOS 上。VM 只掛載專案目錄，對外連線受 allowlist 限制。
 - Runner 只服務這一個 private repo。不要把它註冊到 public repo：任何人開的 PR 都能在上面執行程式。
 - VM 裡的 Claude Code 與 Codex 以你自己的訂閱登入；`auth.json` 與登入狀態視同密碼，只存在 VM 內。
-- Workflow 用的 `AGENT_TOKEN` 是 machine user 的 fine-grained token，沒有 Workflows、Administration、Commit statuses 權限。
+- Runner 在 GitHub 上以你自己的 agent GitHub App 的身分操作，它沒有 Workflows、Administration、Commit statuses 權限。註冊 runner 時把你的 GitHub 帳號加為 label，你名下的 story 才會在你的機器、用你的訂閱執行。
 
 ## 安裝
 
@@ -29,7 +29,7 @@ sandbox/vm.sh shell
 以下在 VM 內執行。註冊用的 token 到 repo 的 Settings > Actions > Runners > New self-hosted runner 取得（Linux ARM64），依頁面指示下載並解壓到 `~/actions-runner`，然後：
 
 ```bash
-cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token REGISTRATION_TOKEN --labels agent-sandbox --unattended
+cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token REGISTRATION_TOKEN --labels agent-sandbox,YOUR_LOGIN --unattended
 ```
 
 ```bash
