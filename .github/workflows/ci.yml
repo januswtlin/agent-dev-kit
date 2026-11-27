@@ -1,6 +1,9 @@
 name: ci
 
-# Mechanical gates. Job names are required status checks in the ruleset: ci, spec-verify.
+# Reusable: called from a project's .github/workflows/agentdev-ci.yml, which runs it
+# on pull requests into the default branch and on pushes to it. The job names are
+# required status checks; GitHub names them "<caller job> / <job>", so with the
+# caller's job called `ci`: "ci / ci" and "ci / spec-verify".
 #
 # Minutes matter (every job is billed rounded up to a whole minute), so:
 #   - a draft pull request only gets lint; the full run happens when it is marked ready
@@ -9,26 +12,27 @@ name: ci
 #
 # `ci` runs pull request code with a read-only token and no secrets. Its runner
 # comes from vars.CI_RUNNER, which `agentctl budget` changes only when an overflow
-# runner is configured in policy/conductor.toml; none is by default, because the
-# runner must be dedicated, hold no credentials and be recreated for every job.
-# `spec-verify` never moves: a machine that ran the pull request's code must not
-# be the one that judges it.
+# runner is configured; none is by default, because that runner must be dedicated,
+# hold no credentials and be recreated for every job. `spec-verify` never moves: a
+# machine that ran the pull request's code must not be the one that judges it.
+#
+# The kit's tools come from the kit itself, at the version the caller passes in
+# `kit_version`, never from the project. `agentctl pins` (in lint) checks that it
+# is the version agentdev.toml pins and the one in the caller's `uses:`.
 
 on:
-  pull_request:
-    # Only pull requests into the default branch are judged. A status earned against
-    # some other base must not exist on a commit that later targets main.
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      kit_version:
+        description: Full commit SHA of the kit; the same as in the caller's `uses:`
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
 
 permissions:
   contents: read
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   ci:
@@ -38,6 +42,8 @@ jobs:
       FULL: ${{ github.event_name == 'push' || github.event.pull_request.draft == false }}
       HEAD_REF: ${{ github.head_ref }}
       BASE_REF: ${{ github.base_ref }}
+      KIT_REPO: ${{ inputs.kit_repository }}
+      KIT_SHA: ${{ inputs.kit_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,38 +52,58 @@ jobs:
         if: runner.environment == 'github-hosted'
         with:
           python-version: "3.12"
-      - run: make setup
-      - run: make lint
+      - name: The kit, at the pinned version
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+          echo "$RUNNER_TEMP/kit/bin" >> "$GITHUB_PATH"
+      - name: Setup
+        run: |
+          cmd="$(agentctl config tests.setup_cmd)"
+          [ -z "$cmd" ] || bash -c "$cmd"
+      - name: Lint
+        run: |
+          agentctl spec-lint
+          agentctl docs-lint
+          agentctl codeowners --check
+          agentctl pins
+          cmd="$(agentctl config tests.lint_cmd)"
+          [ -z "$cmd" ] || bash -c "$cmd"
       - name: Both language versions of a story change together
         if: github.event_name == 'pull_request'
-        run: bin/agentctl spec-lint --base "origin/$BASE_REF"
+        run: agentctl spec-lint --base "origin/$BASE_REF"
 
       - name: Tests on head
         id: tests
         if: env.FULL == 'true'
         continue-on-error: true
-        run: make test
+        run: bash -c "$(agentctl config tests.test_cmd)"
+      - name: Collect the test results
+        if: env.FULL == 'true'
+        run: agentctl collect-junit --out "$RUNNER_TEMP/results/junit"
       - name: Tests on base with this branch's test files (story branches)
         if: env.FULL == 'true' && github.event_name == 'pull_request'
-        run: bin/agentctl redgreen-collect --base "origin/$BASE_REF" --out reports/base-overlay --branch "$HEAD_REF"
+        run: agentctl redgreen-collect --base "origin/$BASE_REF" --out "$RUNNER_TEMP/results/base-overlay" --branch "$HEAD_REF"
       - name: Always leave a result file, so a missing artifact means a broken run
         if: env.FULL == 'true'
         run: |
-          mkdir -p reports/junit
-          [ -n "$(ls -A reports/junit)" ] || echo '<testsuites/>' > reports/junit/none.xml
+          mkdir -p "$RUNNER_TEMP/results/junit"
+          [ -n "$(ls -A "$RUNNER_TEMP/results/junit")" ] || echo '<testsuites/>' > "$RUNNER_TEMP/results/junit/none.xml"
       - uses: actions/upload-artifact@v4
         if: env.FULL == 'true'
         with:
           name: junit
-          path: reports/
+          path: ${{ runner.temp }}/results/
           retention-days: 90
       - name: Fail when tests failed
         if: steps.tests.outcome == 'failure'
         run: exit 1
 
   spec-verify:
-    # Traceability and red-green, judged from the result files with the tooling and
-    # policy of the base branch. Nothing from the pull request is executed here.
+    # Traceability and red-green, judged from the result files with the kit at the
+    # pinned version and the base branch's agentdev.toml. Nothing from the pull
+    # request is executed here.
     #
     # The result files were produced by a job that ran the pull request's code, so
     # they are untrusted input. The order of the steps is part of the defence:
@@ -96,6 +122,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       HEAD_REF: ${{ github.head_ref }}
       BASE_REF: ${{ github.base_ref }}
+      KIT_REPO: ${{ inputs.kit_repository }}
+      KIT_SHA: ${{ inputs.kit_version }}
+      CALLER_REF: ${{ github.workflow_ref }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -104,13 +133,15 @@ jobs:
       - name: Results of the newest runs on the base branch that have any
         if: github.event_name == 'pull_request'
         run: |
+          # The caller's workflow file, whose runs on the base branch hold the results.
+          workflow="$(basename "${CALLER_REF%@*}")"
           # Up to five runs, whatever they concluded: a test case that passed in any of
           # them must still pass. Insisting on a green run would make a red main
           # impossible to repair; taking only the newest would let one partial run on
           # main make older coverage forgettable.
           # "No results" has to be told apart from "could not find out": an artifact
           # that is absent or expired is skipped, a failed listing or download is an error.
-          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
+          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASE_REF" --event push \
             --status completed --limit 30 --json databaseId --jq '.[].databaseId')"
           found=0
           for id in $ids; do
@@ -156,8 +187,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # The judge is the base branch's copy, started with -I: `python3 -m` would put the
-      # working directory (the pull request's tree) first on the import path.
+      - name: The kit, at the pinned version
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+      # The judge is the kit, started with -I: `python3 -m` would put the working
+      # directory (the pull request's tree) first on the import path. Its settings
+      # come from the base branch's agentdev.toml.
       - name: Traceability
         working-directory: head
         env:
@@ -167,10 +204,10 @@ jobs:
           set -- --junit "$RESULTS/junit/*.xml"
           [ -n "$(ls -A "$RESULTS/main")" ] && set -- "$@" --base-junit "$RESULTS/main/*/*.xml"
           [ -n "$HEAD_REF" ] && set -- "$@" --branch "$HEAD_REF"
-          python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" trace "$@"
+          python3 -I "$RUNNER_TEMP/kit/tools/run.py" trace "$@"
       - name: Red-green
         if: github.event_name == 'pull_request'
         working-directory: head
         env:
           AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
-        run: python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" redgreen-judge --base-dir "$RUNNER_TEMP/results/base-overlay" --junit "$RUNNER_TEMP/results/junit/*.xml" --branch "$HEAD_REF"
+        run: python3 -I "$RUNNER_TEMP/kit/tools/run.py" redgreen-judge --base-dir "$RUNNER_TEMP/results/base-overlay" --junit "$RUNNER_TEMP/results/junit/*.xml" --branch "$HEAD_REF"

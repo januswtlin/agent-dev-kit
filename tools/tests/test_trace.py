@@ -5,7 +5,7 @@ from pathlib import Path
 from agentctl import redgreen, specs, trace
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLE_SPECS = ROOT / "templates/project/docs/specs"
+EXAMPLE_SPECS = ROOT / "examples/specs"
 
 
 def junit(cases: list[tuple[str, str]]) -> str:

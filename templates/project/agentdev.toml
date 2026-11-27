@@ -1,0 +1,39 @@
+# This project's settings for the agent development kit. Anything not set here
+# takes the kit's default (tools/agentctl/defaults.toml in the kit, at the version
+# below). A change to this file is T2: a human approves it.
+
+[kit]
+# The kit version: a full commit SHA. The workflows in .github/workflows call the
+# kit at the same SHA, and the `agentctl` launcher on each Mac runs this version.
+version = "__KIT_VERSION__"
+repository = "__KIT_REPOSITORY__"
+
+[roles]
+# Who approves specs and sprints, and owns the guardrails in CODEOWNERS.
+directors = __DIRECTORS__
+# Whose approval counts for a T2 change. Directors are included.
+humans = __HUMANS__
+
+[tests]
+# Must run every test, write JUnit XML where junit_glob finds it, and exit
+# non-zero when a test fails. Change these when the project picks its stack.
+setup_cmd = ""
+lint_cmd = "make lint"
+test_cmd = "make test"
+junit_glob = "reports/junit/*.xml"
+
+[stories]
+# Story ids: this many digits (story 012, TC-012-01, branch story/012-slug).
+id_digits = 3
+# The language the director approves stories in (story-<lang>.md); "" for English only.
+translation = "zh-TW"
+
+[risk.t2]
+# This project's high-risk code: always reviewed by a human. Set it to the real layout.
+high_risk = [
+  "**/auth/**",
+  "**/payments/**",
+  "**/migrations/**",
+  "infra/**",
+  "**/Dockerfile",
+]

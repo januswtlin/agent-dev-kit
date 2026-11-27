@@ -1,16 +1,22 @@
 name: brief
 
-# Director's brief: a daily status on one fixed issue, plus a weekly audit digest.
+# Reusable: called from a project's .github/workflows/agentdev-brief.yml on a
+# schedule (`secrets: inherit`). Director's brief: a daily status on one fixed
+# issue, plus a weekly audit digest.
 # The numbers come from `agentctl status` and the GitHub API, not from an agent's
 # account of its own work.
 
 on:
-  schedule:
-    - cron: "43 23 * * *"   # daily, 07:43 Asia/Taipei
-    - cron: "7 1 * * 1"     # weekly digest, Monday 09:07 Asia/Taipei
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      kit_version:
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
       weekly:
+        description: Add the weekly audit
         type: boolean
         default: false
 
@@ -21,7 +27,7 @@ permissions:
 
 jobs:
   brief:
-    # Skipped until the conductor GitHub App is configured (docs/new-project.md, section 3).
+    # Skipped until the Conductor GitHub App is configured.
     if: vars.CONDUCTOR_APP_ID != ''
     runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -37,6 +43,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: The kit, at the pinned version
+        env:
+          KIT_REPO: ${{ inputs.kit_repository }}
+          KIT_SHA: ${{ inputs.kit_version }}
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+          echo "$RUNNER_TEMP/kit/bin" >> "$GITHUB_PATH"
       - uses: actions/create-github-app-token@v1
         id: app
         with:
@@ -45,18 +60,18 @@ jobs:
       - name: Actions budget
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: bin/agentctl budget | tee budget.txt
+        run: agentctl budget | tee budget.txt
       - name: Build the brief
         env:
           CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
-          WEEKLY: ${{ github.event.schedule == '7 1 * * 1' || inputs.weekly }}
+          WEEKLY: ${{ inputs.weekly }}
         run: |
           since="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
           [ "$WEEKLY" = "true" ] && since="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
           {
             echo "# Director's brief $(date -u +%Y-%m-%d)"
             echo
-            bin/agentctl status --markdown
+            agentctl status --markdown
             head -1 budget.txt
             echo
             echo "### Waiting for your review"
@@ -76,7 +91,7 @@ jobs:
               echo
               echo "## Weekly audit"
               gh pr list --state merged --search "merged:>=$since" --limit 200 --json number,title,labels \
-                | python3 scripts/weekly-audit.py
+                | python3 -I "$RUNNER_TEMP/kit/scripts/weekly-audit.py"
               echo "- Escalations opened: $(gh issue list --state all --label needs-human --search "created:>=$since" --json number --jq length)"
             } >> brief.md
           fi

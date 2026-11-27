@@ -93,7 +93,7 @@ def check(spec: Spec, base_results: dict[str, TcResult], head_results: dict[str,
                 "(does `make setup` work on a clean checkout of the base branch?)"]
     if base_report_count == 0:
         return ["the test run on base produced no report at all, so red-green cannot be established "
-                "(does `make setup && make test` work on a clean checkout of the base branch?)"]
+                "(do [tests] setup_cmd and test_cmd work on a clean checkout of the base branch?)"]
     for tc in spec.tc:
         head = head_results.get(tc.id, TcResult())
         if not head.ok:

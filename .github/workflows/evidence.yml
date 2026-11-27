@@ -1,12 +1,23 @@
 name: evidence
 
-# After a story merges, post the AC -> TC -> test -> result table on the story
-# issue. This is what the director reads instead of the code.
+# Reusable: called from a project's .github/workflows/agentdev-evidence.yml when a
+# pull request into the default branch closes. After a story merges, post the
+# AC -> TC -> test -> result table on the story issue. This is what the director
+# reads instead of the code.
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
+  workflow_call:
+    inputs:
+      kit_version:
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
+      ci_workflow:
+        description: The project's workflow file that calls the kit's ci
+        type: string
+        default: agentdev-ci.yml
 
 permissions:
   contents: read
@@ -21,26 +32,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: The kit, at the pinned version
+        env:
+          KIT_REPO: ${{ inputs.kit_repository }}
+          KIT_SHA: ${{ inputs.kit_version }}
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+          echo "$RUNNER_TEMP/kit/bin" >> "$GITHUB_PATH"
       # Reuse the results of the pull request's last green ci run instead of running the suite again.
       - name: Fetch test results
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_WORKFLOW: ${{ inputs.ci_workflow }}
         run: |
-          run_id="$(gh run list --workflow ci.yml --commit "$HEAD_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
-          [ -n "$run_id" ] && gh run download "$run_id" -n junit -D reports
+          run_id="$(gh run list --workflow "$CI_WORKFLOW" --commit "$HEAD_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          [ -n "$run_id" ] && gh run download "$run_id" -n junit -D "$RUNNER_TEMP/results"
       - name: Post the evidence table
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          story="$(printf '%s' "$HEAD_REF" | sed -E 's#^story/([0-9]{3}).*#\1#')"
-          bin/agentctl evidence "$story" --junit 'reports/junit/*.xml' > evidence.md
+          story="$(agentctl story-of "$HEAD_REF")"
+          [ -n "$story" ] || { echo "not a story branch: $HEAD_REF"; exit 0; }
+          agentctl evidence "$story" --junit "$RUNNER_TEMP/results/junit/*.xml" > evidence.md
           echo "" >> evidence.md
           echo "Merged in #$PR." >> evidence.md
           issue="$(gh issue list --label "story:$story" --state all --limit 1 --json number --jq '.[0].number')"

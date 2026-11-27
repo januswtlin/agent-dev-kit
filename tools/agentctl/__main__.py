@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import apptoken, budget, config, docs, doctor, ids, local, owners, profiles, redgreen, risk, specs, trace
+from . import apptoken, budget, config, docs, doctor, ids, local, owners, pins, profiles, redgreen, risk, specs, trace
 
 
 def _root() -> Path:
@@ -406,6 +406,82 @@ def cmd_sandbox(args) -> int:
     os.execv("/bin/bash", ["bash", str(KIT_ROOT / "sandbox" / "sbx.sh"), *args.args])
 
 
+def cmd_config(args) -> int:
+    """Print one setting, for workflows and scripts: `agentctl config tests.test_cmd`."""
+    value = _config()
+    for part in args.key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            print(f"no setting {args.key}", file=sys.stderr)
+            return 1
+        value = value[part]
+    if isinstance(value, list) and args.words:
+        print(" ".join(str(v) for v in value))
+    elif isinstance(value, (dict, list)):
+        print(json.dumps(value))
+    else:
+        print(value)
+    return 0
+
+
+def cmd_story_of(args) -> int:
+    """Print the story id of a branch name, or nothing."""
+    _config()  # the id length comes from the configuration
+    print(_story_from_branch(args.branch) or "")
+    return 0
+
+
+def cmd_prompt(args) -> int:
+    """Print a stage's prompt, filled in from the project's configuration."""
+    from . import prompts
+    print(prompts.render(args.stage, _config()))
+    return 0
+
+
+def cmd_pins(args) -> int:
+    """Check that every reference to the kit in .github/workflows uses the version agentdev.toml pins."""
+    cfg = _config()
+    return _finish("kit pins", pins.check(_root(), cfg["kit"].get("repository", ""), cfg["kit"].get("version", "")))
+
+
+def cmd_collect_junit(args) -> int:
+    """Copy the JUnit files [tests] junit_glob finds into one directory, under unique names."""
+    import glob as _glob
+    import shutil
+    cfg, root = config.load(_root()), _root()
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    found = sorted(_glob.glob(str(root / cfg["tests"]["junit_glob"]), recursive=True))
+    for n, path in enumerate(found):
+        source = Path(path)
+        if source.is_symlink() or not source.is_file():
+            continue
+        shutil.copyfile(source, out / f"{n:03d}-{source.name}")
+    print(f"{len(found)} JUnit file(s) from {cfg['tests']['junit_glob']}")
+    return 0
+
+
+def cmd_init(args) -> int:
+    from . import init
+    created, kept = init.init(_root(), args.people, args.kit_version, args.dry_run)
+    for rel in created:
+        print(("would create " if args.dry_run else "created ") + rel)
+    for rel in kept:
+        print(f"kept       {rel} (exists; merge the kit's version by hand if you need it)")
+    if not args.dry_run:
+        print("Next: review agentdev.toml, commit, and follow the setup document of each layer you adopt.")
+    return 0
+
+
+def cmd_rulesets(args) -> int:
+    from .github import KIT_ROOT
+    os.execv("/bin/bash", ["bash", str(KIT_ROOT / "scripts" / "apply-rulesets.sh"), *([args.repo] if args.repo else [])])
+
+
+def cmd_junit_unittest(args) -> int:
+    from . import junit_unittest
+    return junit_unittest.main(["junit-unittest", args.test_dir, args.output])
+
+
 def cmd_doctor(args) -> int:
     results = doctor.inside_checks() if args.inside else doctor.host_checks(_root())
     return doctor.report(results)
@@ -502,6 +578,41 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("sandbox", help="run the kit's sandbox script: setup, or job HARNESS STORY STAGE PROMPT")
     p.add_argument("args", nargs=argparse.REMAINDER)
     p.set_defaults(func=cmd_sandbox)
+
+    p = sub.add_parser("config", help="print one setting of agentdev.toml (with the kit defaults), e.g. tests.test_cmd")
+    p.add_argument("key")
+    p.add_argument("--words", action="store_true", help="print a list as space-separated words")
+    p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("story-of", help="print the story id of a branch name")
+    p.add_argument("branch")
+    p.set_defaults(func=cmd_story_of)
+
+    p = sub.add_parser("prompt", help="print a stage's prompt filled in for this project")
+    p.add_argument("stage")
+    p.set_defaults(func=cmd_prompt)
+
+    p = sub.add_parser("pins", help="check that the workflows use the kit version agentdev.toml pins")
+    p.set_defaults(func=cmd_pins)
+
+    p = sub.add_parser("collect-junit", help="copy the JUnit files of [tests] junit_glob into one directory")
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_collect_junit)
+
+    p = sub.add_parser("init", help="copy the kit's project files into this repository (never overwrites)")
+    p.add_argument("people", nargs="+", metavar="LOGIN", help="the director first, then anyone else whose approval counts")
+    p.add_argument("--kit-version", default="", help="full commit SHA to pin (default: this kit's own)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("rulesets", help="create or update the repository's rulesets (run by an admin)")
+    p.add_argument("repo", nargs="?", help="owner/name (default: the current repository)")
+    p.set_defaults(func=cmd_rulesets)
+
+    p = sub.add_parser("junit-unittest", help="run Python unittest over a directory and write JUnit XML")
+    p.add_argument("test_dir")
+    p.add_argument("output")
+    p.set_defaults(func=cmd_junit_unittest)
 
     p = sub.add_parser("doctor", help="check host hygiene, or the sandbox boundary with --inside")
     p.add_argument("--inside", action="store_true")

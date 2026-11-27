@@ -211,6 +211,11 @@ class DispatchTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
+    def test_check_names_from_reusable_workflows_drop_the_caller(self):
+        self.assertEqual(github.check_name({"name": "ci / spec-verify"}), "spec-verify")
+        self.assertEqual(github.check_name({"name": "risk-gate"}), "risk-gate")
+        self.assertEqual(github.check_name({"context": "agent-review"}), "agent-review")
+
     def test_only_trusted_authors_markers_count(self):
         issue = {"comments": [
             {"author": {"login": "conductor[bot]"}, "body": '<!-- conductor {"id":"a","stage":"impl","at":1} -->'},

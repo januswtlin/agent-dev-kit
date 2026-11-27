@@ -1,7 +1,11 @@
 name: release
 
 # Production deploys happen only from a v* tag, and only humans can create v*
-# tags (.github/rulesets/release-tags.json). Pushing the tag is the release approval.
+# tags (the release-tags ruleset). Pushing the tag is the release approval.
+#
+# This file belongs to the project, not to the kit: deploying is the project's own
+# business. It is a starting point; the check names below are the kit's required
+# checks as GitHub reports them.
 #
 # There are no long-lived cloud keys anywhere. The job exchanges a GitHub OIDC
 # token for short-lived credentials, and the cloud side must only trust
@@ -38,7 +42,7 @@ jobs:
           # Each named check must be PRESENT and green. Counting failures alone would
           # also pass a commit on which the checks never ran.
           runs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --jq '.check_runs[] | "\(.name) \(.conclusion)"')"
-          for name in ci security spec-verify; do
+          for name in "ci / ci" "security / security" "ci / spec-verify"; do
             if ! printf '%s\n' "$runs" | grep -qx "$name success"; then
               echo "::error::check '$name' did not succeed on this commit"; exit 1
             fi
@@ -46,14 +50,14 @@ jobs:
               echo "::error::check '$name' also has a run that is not green on this commit"; exit 1
             fi
           done
-      - run: make setup && make build
+      - run: echo "build the release here"
 
       # --- AWS example -------------------------------------------------------
       # - uses: aws-actions/configure-aws-credentials@v4
       #   with:
       #     role-to-assume: arn:aws:iam::<account>:role/release
       #     aws-region: <region>
-      # - run: make deploy ENV=production
+      # - run: ./deploy.sh production
 
       - name: Deploy
-        run: echo "No deployment target configured yet. See docs/guideline.md, Production."
+        run: echo "No deployment target configured yet."

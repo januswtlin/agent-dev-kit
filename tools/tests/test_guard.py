@@ -3,7 +3,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-GUARD = Path(__file__).resolve().parents[2] / ".claude/hooks/guard.sh"
+GUARD = Path(__file__).resolve().parents[2] / "templates/project/.claude/hooks/guard.sh"
 
 BLOCKED = [
     "rm -rf ~/", "rm -rf /", "rm -fr ../other",

@@ -1,5 +1,5 @@
 # Copy this folder to docs/specs/NNN-slug/ and fill it in.
-# Check with: bin/agentctl spec-lint
+# Check with: agentctl spec-lint
 
 id = "NNN"              # three digits, same as the folder prefix
 slug = "short-name"     # the branch will be story/NNN-short-name

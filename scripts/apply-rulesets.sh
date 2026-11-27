@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Create or update the repository rulesets from .github/rulesets/*.json.
-# Run by a repository admin (a human), never by an agent:
+# Create or update a project's rulesets from the kit's templates/rulesets/*.json.
+# Run by a repository admin (a human), never by an agent, from inside the project:
 #
-#   scripts/apply-rulesets.sh              # current repository
-#   scripts/apply-rulesets.sh owner/repo
+#   agentctl rulesets              # the current repository
+#   agentctl rulesets owner/repo
 #
 # Private repositories need the GitHub Team plan for rulesets.
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 case "$CONDUCTOR_APP_ID" in *[!0-9]*) echo "CONDUCTOR_APP_ID must be a number" >&2; exit 1 ;; esac
 
 repo="${1:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
-dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.github/rulesets" && pwd)"
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../templates/rulesets" && pwd)"
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 for source in "$dir"/*.json; do

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Run Python's unittest over a directory and write the results as JUnit XML.
 
-The default `make test` of the template, so that a new project has a test
+Used by the Makefile of the project template, so that a new project has a test
 runner that produces what the gates read (reports/junit/*.xml) before it has
-chosen a stack. Standard library only. Replace it in the Makefile when the
-project has its own runner.
+chosen a stack. Standard library only. Replace it when the project has its own
+runner.
 
-    python3 tools/junit_unittest.py TEST_DIR OUTPUT.xml
+    agentctl junit-unittest TEST_DIR OUTPUT.xml
 
 Exits 1 when a test failed or could not be loaded, 0 otherwise, also when
 TEST_DIR does not exist yet (the report is then empty).

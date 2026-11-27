@@ -1,15 +1,20 @@
 name: security
 
-# Required status check: security. Skipped on draft pull requests.
-# New or changed dependencies are not judged here; they are routed to a human
-# by the risk gate (policy/risk-tiers.toml, dependency_manifests).
+# Reusable: called from a project's .github/workflows/agentdev-security.yml on pull
+# requests into the default branch and on pushes to it. Required status check
+# "security / security". Skipped on draft pull requests.
+# New or changed dependencies are not judged here; they are routed to a human by
+# the risk gate ([risk.t2] dependency_manifests in agentdev.toml).
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      kit_version:
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
 
 permissions:
   contents: read
@@ -52,4 +57,4 @@ jobs:
         if: steps.code.outputs.changed == 'true'
         run: |
           python3 -m venv "$RUNNER_TEMP/semgrep" && "$RUNNER_TEMP/semgrep/bin/pip" install --quiet semgrep
-          "$RUNNER_TEMP/semgrep/bin/semgrep" scan --config auto --error --quiet --exclude tools/tests
+          "$RUNNER_TEMP/semgrep/bin/semgrep" scan --config auto --error --quiet

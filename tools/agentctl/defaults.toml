@@ -8,6 +8,8 @@
 # The installed `agentctl` launcher runs this version, read from the default
 # branch; the caller workflows in .github/workflows must use the same SHA.
 version = ""
+# Where the kit's reusable workflows are called from.
+repository = "januswtlin/agent-dev-kit"
 
 [paths]
 specs = "docs/specs"
@@ -196,7 +198,7 @@ planner = "claude"
 #   via = "sbx"      a fresh clone-mode Docker Sandbox on the Mac that runs the conductor
 [roles.harness.claude]
 # Reviews run as a workflow job, so the job itself sets the agent-review status.
-review_workflow = "agent-review.yml"
+review_workflow = "agentdev-agent-review.yml"
 via = "http"
 url_env = "CLAUDE_TRIGGER_URL"
 token_env = "CLAUDE_TRIGGER_TOKEN"

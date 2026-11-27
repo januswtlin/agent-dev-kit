@@ -1,20 +1,30 @@
 name: risk-gate
 
-# Required status check: risk-gate.
-# T0 and T1 pass. T2 passes only once a human listed in policy/roles.toml has
-# approved the current head commit. Re-runs when a review is submitted.
+# Reusable: called from a project's .github/workflows/agentdev-risk-gate.yml on
+# pull requests into the default branch and on submitted or dismissed reviews.
+# Required status check "risk-gate / risk-gate".
+#
+# T0 and T1 pass. T2 passes only once a human listed in [roles] humans of the base
+# branch's agentdev.toml has approved the current head commit.
 #
 # The tier is published twice. The label `tier:T?` on the pull request is for
 # people. The commit status `risk-tier/T?` on the head commit is what the
 # conductor reads when it decides whether it may merge: an agent's token can
 # edit labels, but cannot write a commit status.
+#
+# This job can write statuses and labels. Nothing from the pull request runs here:
+# its tree is checked out as data, the tools are the kit at the pinned version,
+# and the settings come from the base branch.
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_review:
-    types: [submitted, dismissed]
+  workflow_call:
+    inputs:
+      kit_version:
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
 
 permissions:
   contents: read
@@ -25,6 +35,9 @@ jobs:
   risk-gate:
     runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
+    env:
+      KIT_REPO: ${{ inputs.kit_repository }}
+      KIT_SHA: ${{ inputs.kit_version }}
     steps:
       # pull_request_review cannot be filtered by base branch in `on:`. The job must
       # FAIL here, not be skipped: GitHub counts a skipped job as a passed required
@@ -37,32 +50,42 @@ jobs:
           [ "$BASE" = "$DEFAULT_BRANCH" ] || { echo "::error::this pull request targets $BASE, not $DEFAULT_BRANCH"; exit 1; }
       - uses: actions/checkout@v4
         with:
+          path: head
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compute tier (tooling and policy from base)
+      - name: The kit, at the pinned version
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+      - name: Compute tier (settings from base)
         id: tier
+        working-directory: head
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          git worktree add --detach ../base "origin/$BASE_REF"
-          # This job can write statuses and labels, and its working directory is the pull
-          # request's tree. Every Python below runs with -I so that tree cannot supply a
-          # module (agentctl.py, json.py, tomllib.py) in place of the real one.
-          AGENTCTL_TRUSTED_ROOT="$GITHUB_WORKSPACE/../base" \
-            python3 -I ../base/tools/run.py risk --base "origin/$BASE_REF" --branch "$HEAD_REF" | tee "$RUNNER_TEMP/risk.json"
-          echo "tier=$(python3 -I -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/risk.json"))["tier"])')" >> "$GITHUB_OUTPUT"
+          git worktree add --detach "$RUNNER_TEMP/base" "origin/$BASE_REF"
+          # The working directory is the pull request's tree. Every Python below runs
+          # with -I so that tree cannot supply a module (agentctl.py, json.py,
+          # tomllib.py) in place of the real one.
+          AGENTCTL_TRUSTED_ROOT="$RUNNER_TEMP/base" \
+            python3 -I "$RUNNER_TEMP/kit/tools/run.py" risk --base "origin/$BASE_REF" --branch "$HEAD_REF" | tee "$RUNNER_TEMP/risk.json"
+          tier="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["tier"])' "$RUNNER_TEMP/risk.json")"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
           {
-            echo "### Risk tier: $(python3 -I -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/risk.json"))["tier"])')"
-            python3 -I -c 'import json,os;[print("- "+r) for r in json.load(open(os.environ["RUNNER_TEMP"]+"/risk.json"))["reasons"]]'
+            echo "### Risk tier: $tier"
+            python3 -I -c 'import json,sys;[print("- "+r) for r in json.load(open(sys.argv[1]))["reasons"]]' "$RUNNER_TEMP/risk.json"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Label the pull request
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           TIER: ${{ steps.tier.outputs.tier }}
         run: |
@@ -97,10 +120,12 @@ jobs:
         if: steps.tier.outputs.tier == 'T2'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          humans="$(python3 -I -c 'import tomllib;print(" ".join(tomllib.load(open("../base/policy/roles.toml","rb"))["humans"]))')"
+          humans="$(cd "$RUNNER_TEMP" && AGENTCTL_TRUSTED_ROOT="$RUNNER_TEMP/base" python3 -I "$RUNNER_TEMP/kit/tools/run.py" config roles.humans --words)"
+          [ -n "$humans" ] || { echo "::error::[roles] humans is empty in agentdev.toml on the base branch"; exit 1; }
           approvers="$(gh pr view "$PR" --json reviews \
             --jq "[.reviews[] | select(.state==\"APPROVED\" and .commit.oid==\"$HEAD_SHA\") | .author.login] | unique | .[]")"
           for h in $humans; do

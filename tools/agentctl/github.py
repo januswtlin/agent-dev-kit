@@ -103,6 +103,12 @@ def _check_state(item: dict) -> str:
     return "pending"
 
 
+def check_name(item: dict) -> str:
+    """A check's name without its caller: the kit's workflows are reusable, and
+    GitHub reports their jobs as "<caller job> / <job>" ("ci / spec-verify")."""
+    return (item.get("name") or item.get("context") or "").rsplit(" / ", 1)[-1]
+
+
 ISSUE_FIELDS = "number,labels,comments"
 
 
@@ -297,7 +303,7 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
         pr = None
         p = select_pr(prs, sid, default_branch, f"story/{sid}-{spec.slug}" if spec else None)
         if p:
-            checks = {(c.get("name") or c.get("context") or ""): _check_state(c) for c in p.get("statusCheckRollup") or []}
+            checks = {check_name(c): _check_state(c) for c in p.get("statusCheckRollup") or []}
             pr = PR(
                 number=p["number"],
                 merged=p.get("state") == "MERGED",
@@ -346,7 +352,7 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
     branches = [tuple(line.split("\t", 1)) for line in raw.splitlines() if "\t" in line]
 
     main_checks = gh_json("api", f"repos/{repo}/commits/{default_branch}/check-runs", "--jq", ".check_runs", default=[]) or []
-    main_red = any(c.get("name") == "ci" and c.get("conclusion") == "failure" for c in main_checks)
+    main_red = any(check_name(c) == "ci" and c.get("conclusion") == "failure" for c in main_checks)
     fix_main = gh_json("issue", "list", "--label", "fix-main", "--state", "open", "--json", "number", default=[])
 
     story_branches = {f"story/{sid}-{spec.slug}" for sid, spec in specs.items()}
