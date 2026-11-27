@@ -25,7 +25,7 @@ What it does not do:
 
 ## 2. Before you start
 
-- Layers 1, 2 and 3 are in place and their checklists have been run: [layer-1-isolation.md](layer-1-isolation.md), [layer-2-github.md](layer-2-github.md), [layer-3-ci.md](layer-3-ci.md). In particular the layer-2 rulesets (`main`, `main-merge`, `release-tags`) are active and the layer-3 ruleset `main-checks` is applied (`agentctl rulesets 3`), CODEOWNERS is generated, `ci` has been green on `main`, and Allow auto-merge is on in the repository settings.
+- Layers 1, 2 and 3 are in place and their checklists have been run: [layer-1-isolation.md](layer-1-isolation.md), [layer-2-github.md](layer-2-github.md), [layer-3-ci.md](layer-3-ci.md). In particular the layer-2 rulesets (`main`, `main-merge`, `tags`) are active and the layer-3 ruleset `main-checks` is applied (`agentctl rulesets 3`), CODEOWNERS is generated, `ci` has been green on `main`, and Allow auto-merge is on in the repository settings.
 - The kit is installed on this Mac and `agentctl` runs from inside the project ([adopting.md](adopting.md)). The launcher runs the kit version pinned in `agentdev.toml` on the default branch.
 - The Conductor GitHub App exists, is installed on the repository, and its private key is on this Mac outside the project directory (layer 2).
 - `openssl` is on the path. It signs the request for the App's token.
@@ -223,7 +223,7 @@ Defaults are in `[conductor]` of `defaults.toml`:
 | `draft_next_sprint_at` | 0.8 | Share of the sprint merged at which the next sprint is drafted |
 | `stage_timeout_minutes` | default 90, design 45, review 45, triage 30, product-owner 60 | How long a dispatched stage may run before it counts as stalled |
 | `max_parked_hours` | 72 | A story parked for a dependency that triage added is escalated when nothing has happened for longer than this |
-| `max_dispatches_per_story` | 15 | Sessions of every stage together. A story that has used that many is escalated, but never while a session runs |
+| `max_dispatches_per_story` | 15 | Sessions of every stage together, counted since the story's last escalation. A story that would start a session beyond this is escalated instead; one whose last session finished it is not |
 | `remind_after_hours` | 48 | A story waiting on a person (`needs-human`, `blocked`, a T2 or review approval) is mentioned again on the sprint issue, once per wait. The reminder does not suppress the "sprint stalled" notice |
 | `auto_merge_tiers` | `[]` | Tiers the conductor may merge (section 3.10) |
 
@@ -441,10 +441,11 @@ Items D1 to D8, D11 to D15, D17 to D19 and D21 are in [layer-3-ci.md](layer-3-ci
 | F21 | Sleep. With the conductor running and a stage in flight in the cloud, put the Mac to sleep for longer than the stage's timeout, then wake it | Nothing is dispatched while it sleeps. After waking, the next pass treats the stalled stage by the normal rule: dispatched again as attempt 2 if it never reported, not dispatched if it did report. Note what happened | |
 | F22 | Spec drafting limit. Put four unchecked lines in the roadmap on `main`, with no spec pull requests open | The conductor dispatches the product-owner stage once at a time, and never leaves more than `max_open_spec_prs` unapproved spec pull requests open | |
 | F23 | Parked too long. Park a story (triage adds a dependency on an unfinished story) and let it sit past `max_parked_hours` (set it to 1 for the test) | The story is labelled `needs-human` with a comment saying it has waited for the named story for over that many hours. It is escalated once, not every pass | |
-| F24 | Session limit. Set `max_dispatches_per_story` to 3 and let a story use three sessions | After the third session ends the story is escalated with "3 sessions without finishing". While a session is still running it is not escalated | |
+| F24 | Session limit. Set `max_dispatches_per_story` to 3 and let a story use three sessions without finishing | When it would start a fourth, it is escalated with "3 sessions without finishing". Remove `needs-human`: it gets three more sessions before the next escalation | |
 | F25 | Waiting for the escalated one. Escalate story A while story B depends on it (by a triage dependency) | The comment on A ends "Waiting for it: B." B is not labelled `needs-human`. After you settle A, B resumes | |
 | F26 | Reminder. Leave a story at `needs-human` (or a T2 PR unapproved) past `remind_after_hours` (set it to 1) | One more mention on the sprint issue, once per wait. If every unfinished story is waiting, the "sprint stalled" notice still comes | |
 | F27 | Returning stories. Park two stories that touch the same thing while one has a session running, then satisfy the dependency | The one with the running session is admitted first and keeps its claim; the other does not start beside it | |
+| F28 | Clearing a parked story. Let F23 escalate a parked story, then remove `needs-human` | It is not escalated again until another `max_parked_hours` have passed | |
 
 ## 5. Not yet verified
 

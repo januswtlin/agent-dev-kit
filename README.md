@@ -89,7 +89,7 @@ It copies the project files without overwriting anything and lists what it kept.
 | `agentctl init DIRECTOR [HUMAN ...]` | Copy the project files into a project, never overwriting. `--dry-run` lists what it would do |
 | `agentctl doctor` | Check host hygiene on the Mac. `--inside` checks the boundary from inside a sandbox |
 | `agentctl sandbox setup` | Once per Mac per project: lock down sbx and install the token helpers |
-| `agentctl rulesets 2 [OWNER/REPO]` | Create or update the layer 2 rulesets: `main`, `main-merge`, `release-tags` (run by an admin, with `CONDUCTOR_APP_ID` set) |
+| `agentctl rulesets 2 [OWNER/REPO]` | Create or update the layer 2 rulesets: `main`, `main-merge`, `tags` (run by an admin, with `CONDUCTOR_APP_ID` set) |
 | `agentctl rulesets 3 [OWNER/REPO]` | Create or update `main-checks`, the required checks. Apply it only after the layer 3 callers are on the default branch |
 | `agentctl codeowners [--check]` | Print `.github/CODEOWNERS` generated from `agentdev.toml`, or check the committed one |
 | `agentctl conductor` | Run the conductor in this terminal. `--dry-run` prints one pass and acts on nothing. Ctrl-C stops it |

@@ -57,7 +57,7 @@ GitHub names a called job `<caller job> / <job>`. That is why the required check
 
 The callers have two fixed facts:
 
-- `agentdev-agent-review.yml` and `agentdev-brief.yml` use `secrets: inherit`. They need secrets of the `conductor` environment, which a called job reaches because it declares `environment: conductor`. (**To verify**: environment secrets in a called job.)
+- `agentdev-brief.yml` and the `agent-review` job of `agentdev-agent-review.yml` (the review the conductor dispatches) use `secrets: inherit`. They need secrets of the `conductor` environment, which a called job reaches because it declares `environment: conductor`. The `review-bot` job of the same caller, which runs on submitted reviews, passes no secrets: for that event GitHub runs the pull request's copy of the file. Keep model tokens in the `conductor` environment, never as repository secrets. (**To verify**: environment secrets in a called job.)
 - Every caller names the kit twice, as `uses: januswtlin/agent-dev-kit/.github/workflows/x.yml@<sha>` and `kit_version: <sha>`. Both must equal `[kit] version` in `agentdev.toml`.
 
 Check the pins at any time:
@@ -72,7 +72,7 @@ If the project already has workflows with the same file names, `agentctl init` k
 
 ### 3.2 Required checks and the first green run
 
-The five required checks are in their own ruleset, `main-checks`, which is the layer-3 half of the rulesets. Layer 2 applies `main`, `main-merge` and `release-tags` with `agentctl rulesets 2`; layer 3 applies `main-checks`, as an admin, from inside the project:
+The five required checks are in their own ruleset, `main-checks`, which is the layer-3 half of the rulesets. Layer 2 applies `main`, `main-merge` and `tags` with `agentctl rulesets 2`; layer 3 applies `main-checks`, as an admin, from inside the project:
 
 ```bash
 agentctl rulesets 3
@@ -219,7 +219,7 @@ The conductor running on your Mac cannot see GitHub's secrets, so it cannot chec
 
 The inputs of `anthropics/claude-code-action` and the effect of `--tools` and `--allowedTools` are to be verified in the spike. (**To verify**.)
 
-**A review bot, bridged.** A review posted by another agent (for example the Codex cloud GitHub integration, or a review from a local sandbox) is turned into the status by the `bridge` job, on a submitted pull request review. It only listens to the logins in the repository variable `REVIEW_BOTS`, a JSON array:
+**A review bot, bridged.** A review posted by another agent (for example the Codex cloud GitHub integration, or a review from a local sandbox) is turned into the status by the `bridge` job, on a submitted pull request review (called from the caller's `review-bot` job, without secrets). It only listens to the logins in the repository variable `REVIEW_BOTS`, a JSON array:
 
 ```bash
 gh variable set REVIEW_BOTS --body '["chatgpt-codex-connector[bot]"]'

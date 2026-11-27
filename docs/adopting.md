@@ -165,7 +165,7 @@ Removal is the reverse of adoption, from the outermost layer inwards:
 
 1. **Conductor.** Stop it (Ctrl-C). Set the repository variable `CONDUCTOR_PAUSED` to `true` if you may restart it. Disable auto-merge on any open pull request that has it: `gh pr merge NUMBER --disable-auto`. Delete `~/.config/agent-dev/<owner>-<repo>/`.
 2. **CI gates.** Delete the ruleset `main-checks` before deleting the workflows, or no pull request can merge. Then delete `.github/workflows/agentdev-*.yml`.
-3. **GitHub protection.** Delete the rulesets `main`, `main-merge` and `release-tags` (layer 2) if you no longer want them, and the `conductor` environment. Uninstall the Conductor GitHub App. Keep CODEOWNERS and the rulesets if you want protection without the rest: they stand alone.
+3. **GitHub protection.** Delete the rulesets `main`, `main-merge` and `tags` (layer 2) if you no longer want them, and the `conductor` environment. Uninstall the Conductor GitHub App. Keep CODEOWNERS and the rulesets if you want protection without the rest: they stand alone.
 4. **Isolation.** List the sandboxes with `sbx` and remove those named for the project (their names start with `ag-`). Uninstall the developer's agent GitHub App, and delete `~/.config/agent-app/` if no other project uses it.
 5. **The project's files.** Delete `agentdev.toml`, the `.claude/` files and the docs skeleton that you no longer use. Keep `AGENTS.md` if its rules still serve you.
 6. **The installed kit.** Versions are read-only. To remove one:

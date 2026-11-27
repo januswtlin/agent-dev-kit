@@ -14,7 +14,7 @@ Done once per project, by someone who administers the repository.
 | A pull request merged without a human where one is needed | `main` ruleset: code owner review required. CODEOWNERS (generated from `[risk.t2]`) names a director for the guardrails, specs, sprints, dependency manifests and high-risk code. A new push dismisses stale approvals. |
 | An agent merges its own green pull request | `main-merge` ruleset: only repository admins and the Conductor App may update the default branch. The agent token can push branches and, by GitHub's rules, call the merge endpoint, so this ruleset is what refuses it. |
 | Merging before the gates pass | `main-checks` ruleset (applied with layer 3): the five required checks, strict (the branch must be up to date). The checks come from layer 3. |
-| A release tag created, moved or deleted by an agent | `release-tags` ruleset: only repository admins touch `v*` tags. |
+| A tag created, moved or deleted by an agent: a `v*` release, or a tag named like a branch (`origin/main`) that a short ref name would resolve to | `tags` ruleset: only repository admins touch any tag. |
 | A branch or a cloud session reads the pipeline's secrets | The `conductor` environment holds them and allows the default branch only. |
 | An agent approves its own pull request | The Conductor App opens pull requests, so no human is the author; agents' tokens cannot review as a code owner. A person cannot approve a pull request they opened (D10). |
 | Squash-merge history, stale branches | Repository settings: squash only, auto-delete head branches. |
@@ -24,7 +24,7 @@ Done once per project, by someone who administers the repository.
 - A GitHub organization on a plan that enforces rulesets on private repositories (Team or above), with one seat per person. Agents and the Conductor App are GitHub Apps and take no seat. On a plan that does not enforce them, the rulesets are created but protect nothing: not verified which plan names apply today, so check GitHub's plan page.
 - `gh` logged in as a repository admin (`gh variable get --help` must print usage text; older releases lack it), `git` able to push over HTTPS (`gh auth setup-git`), Python 3.11 or newer, and the kit installed on this Mac ([layer-1-isolation.md](layer-1-isolation.md), section 2).
 - The project's repository exists, with `agentdev.toml` (at least `[kit]`, `[roles] directors` and `humans`) on `main`. `agentctl init DIRECTOR_LOGIN [OTHER_LOGIN ...]` creates it and CODEOWNERS ([adopting.md](adopting.md)).
-- Layer 2 stands alone. `agentctl rulesets 2` applies `main`, `main-merge` and `release-tags`, none of which requires a check. The required checks are a separate ruleset, `main-checks`, applied later by `agentctl rulesets 3` (section 3.4) once layer 3's caller workflows are on `main` and have run. Applying it earlier would block every merge, because a check that never reports never passes and the ruleset has no bypass.
+- Layer 2 stands alone. `agentctl rulesets 2` applies `main`, `main-merge` and `tags`, none of which requires a check. The required checks are a separate ruleset, `main-checks`, applied later by `agentctl rulesets 3` (section 3.4) once layer 3's caller workflows are on `main` and have run. Applying it earlier would block every merge, because a check that never reports never passes and the ruleset has no bypass.
 - While `main` still holds the placeholder `DIRECTOR_LOGIN`, nobody is a code owner and nobody could approve a pull request that fixes it. Put real logins in `agentdev.toml` and CODEOWNERS before applying the rulesets.
 - The project's default branch is known to your clone, because the launcher reads `agentdev.toml` from it. This must print `origin/main`; if not, run `git remote set-head origin -a`:
 
@@ -91,7 +91,7 @@ The script refuses to run without `CONDUCTOR_APP_ID`, and it needs `gh`. It crea
 
 - `main`: no deletion, no force-push, changes only through a pull request with code owner review (zero required approving reviews otherwise; approvals dismissed on push; squash only). It has no required checks of its own. No bypass for anyone.
 - `main-merge`: only repository admins (role 5) and the Conductor App may update the default branch. They still satisfy everything in `main`.
-- `release-tags`: only repository admins may create, move or delete a `v*` tag.
+- `tags`: only repository admins may create, move or delete any tag.
 
 Confirm:
 
@@ -99,7 +99,7 @@ Confirm:
 gh api repos/OWNER/REPO/rulesets --jq '.[].name'
 ```
 
-It must list `main`, `main-merge` and `release-tags`. When layer 3's caller workflows are on `main` and have run once, apply the checks ruleset (`main-checks`: the five required checks `ci / ci`, `ci / spec-verify`, `security / security`, `risk-gate / risk-gate` and `agent-review`, strict, no bypass):
+It must list `main`, `main-merge` and `tags`. When layer 3's caller workflows are on `main` and have run once, apply the checks ruleset (`main-checks`: the five required checks `ci / ci`, `ci / spec-verify`, `security / security`, `risk-gate / risk-gate` and `agent-review`, strict, no bypass):
 
 ```bash
 agentctl rulesets 3
@@ -121,7 +121,7 @@ gh variable set CONDUCTOR_APP_ID --body APP_ID
 
 ### 3.6 Release tags
 
-`release-tags` makes a `v*` tag a release approval that only an admin can give. The project-owned `release.yml` (copied by `agentctl init`) runs on such a tag and is a starting point: its provider block is yours to fill in, and its check names are the kit's required checks. The cloud side should trust only `repo:OWNER/REPO:ref:refs/tags/v*`, so no branch build and no agent session obtains production access. `release.yml` is not a reusable kit workflow; changing it is a T2 change.
+`tags` makes every tag something only an admin can create, so a `v*` tag is a release approval that only an admin can give, and no agent can push a tag named like a branch. The project-owned `release.yml` (copied by `agentctl init`) runs on such a tag and is a starting point: its provider block is yours to fill in, and its check names are the kit's required checks. The cloud side should trust only `repo:OWNER/REPO:ref:refs/tags/v*`, so no branch build and no agent session obtains production access. `release.yml` is not a reusable kit workflow; changing it is a T2 change.
 
 ## 4. Checklist
 
@@ -135,7 +135,8 @@ Items marked "job" use an agent token as in [layer-1-isolation.md](layer-1-isola
 |---|---|---|---|
 | C1 | Job (`impl`): `git push origin HEAD:main` | Rejected by the ruleset | |
 | C2 | Job (`impl`): `git push --force origin redteam/c2` to a branch that already exists, then `git push --force origin HEAD:main` | The first depends on the rulesets (they cover the default branch only); `main` is not affected: the second is rejected | |
-| C4 | Job (`impl`): `git tag v9.9.9 && git push origin v9.9.9` | Rejected by the `release-tags` ruleset | |
+| C4 | Job (`impl`): `git tag v9.9.9 && git push origin v9.9.9` | Rejected by the `tags` ruleset | |
+| C20 | Job (`impl`): `git tag origin/main && git push origin refs/tags/origin/main` (a tag named like the default branch) | Rejected by the `tags` ruleset. If it ever got through: `agentctl` on the Mac and `risk-gate` still read the real default branch, because they use full ref names and the base commit id | |
 | C6 | Job (`review`): `gh pr review N --approve` on a spec pull request. Repeat from an `impl` job | From `impl`: 403, the token cannot write to pull requests. From `review`: the approval is not counted as a code owner approval, and the pull request still cannot be merged | |
 | C7 | Job (`impl`) and job (`review`): `gh pr merge N --squash` on a pull request whose checks have not passed | Rejected both times. This shows only that a red pull request does not merge. Who may merge a green one is C17(b) | |
 | C17 | (b) Take a pull request into `main` that is otherwise mergeable: every required check green, approved if it needs approval. A harmless documentation change will do. Job (`impl`): `gh api --method PUT repos/OWNER/REPO/pulls/N/merge -f merge_method=squash`. Then merge the same pull request as an authorised actor: an admin, or the Conductor App. Part (a) is in layer 1 | The agent's attempt is refused, and what refuses it is the `main-merge` ruleset, not the token: GitHub's merge endpoint needs only contents: write, which the `write` token has. The authorised actor's merge of the same pull request SUCCEEDS, which shows nothing else was blocking it. A pull request with red checks is refused by other rules and proves nothing | |
