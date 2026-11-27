@@ -1,11 +1,14 @@
 name: agent-job
 
-# Runs one pipeline stage on a self-hosted runner that lives INSIDE the sandbox VM
-# on a developer's Mac (see sandbox/runner/). Jobs queue on GitHub and are picked
-# up whenever that machine is online; nobody has to start them by hand.
+# NOT PART OF THE SUPPORTED SETUP. Kept as a reference for a self-hosted runner
+# inside the Lima fallback VM (sandbox/runner/).
 #
-# This is the supplementary path. Cloud sessions are the primary one, because
-# they keep working with the laptop closed. Ollama stages always come here.
+# The supported local path is a clone-mode Docker Sandbox started by the local
+# conductor (via = "sbx" in policy/roles.toml), one fresh sandbox per stage. This
+# workflow instead runs every stage on one long-lived VM that holds an agent's
+# logins, so stages are not isolated from each other. Known gaps: the allowlists
+# lack the hosts a GitHub Actions runner needs, and the runner service is not
+# given AGENT_APP_ID / AGENT_APP_KEY.
 #
 # Each developer registers the runner in their own VM with the labels
 # `agent-sandbox` and their GitHub login, so a story runs on its assignee's

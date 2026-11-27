@@ -47,8 +47,9 @@ push to a pull request starts CI, and CI minutes are a shared, limited budget.
 
 When, and only when, the work of your stage is complete and pushed:
 
-- add the label `done:<stage>` to the story issue (`design`, `tests`, `impl`, `review`);
-- after a `fix`, remove the label `done:review` instead, to request a fresh review;
+- for `design`, `tests` and `impl`: add the label `done:<stage>` to the story issue;
+- for `fix` and conflict resolution: nothing but the push. A review verdict belongs to one commit, so your push is what asks for a fresh review;
+- for `review`: the verdict you write is the result;
 - leave a short comment on the story issue: what you did, what you could not do.
 
 If you cannot complete the stage, do not add the label. Comment with the reason.

@@ -36,8 +36,8 @@ design changes and why, anything you could not do.
 
 The prompt gives the reason: failing checks or review findings. Read the check
 logs or the reviewer's findings on the pull request, fix exactly those, run
-`make lint` and `make test`, push. Then **remove** the label `done:review` from
-the story issue (if present) to request a fresh review, and comment with what you
+`make lint` and `make test`, push. The push is what asks for a fresh review: a
+review verdict belongs to one commit. Comment on the story issue with what you
 changed per finding. If you disagree with a finding, say why in the comment; do not ignore it.
 
 ## When dispatched as `resolve-conflict`

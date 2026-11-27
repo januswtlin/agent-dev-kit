@@ -75,6 +75,15 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(len(problems), 6)
         self.assertIn("passed on base but is missing now", problems[0])
 
+    def test_deleting_a_spec_together_with_its_tests_is_still_caught(self):
+        without_spec = {k: v for k, v in self.specs.items() if k != "000"}
+        problems = trace.check(without_spec, {}, story=None, base=results(ALL_PASS))
+        self.assertEqual(len(problems), 6)
+
+    def test_a_human_can_retire_test_cases(self):
+        retired = {f"TC-000-0{i}" for i in range(1, 7)}
+        self.assertEqual(trace.check({}, {}, story=None, base=results(ALL_PASS), retired=retired), [])
+
     def test_evidence_table_lists_every_tc(self):
         table = trace.evidence_markdown(self.specs["000"], results(ALL_PASS))
         for tc_id in self.specs["000"].tc_ids:
@@ -98,6 +107,18 @@ class RedGreenTests(unittest.TestCase):
         problems = redgreen.check(self.spec, base, results(ALL_PASS))
         self.assertEqual(len(problems), 1)
         self.assertIn("TC-000-03: passes on base", problems[0])
+
+    def test_a_base_run_with_no_report_proves_nothing(self):
+        problems = redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=0)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("produced no report at all", problems[0])
+        # With a report, a test missing from it (its file could not be imported) is red.
+        self.assertEqual(redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=1), [])
+
+    def test_skipped_on_base_is_not_red(self):
+        base = results([("test_tc_000_02_x", "skip")])
+        problems = redgreen.check(self.spec, base, results(ALL_PASS), base_report_count=1)
+        self.assertEqual(problems, ["TC-000-02: was skipped on base, which does not show that it fails there"])
 
     def test_not_green_on_head_is_rejected(self):
         problems = redgreen.check(self.spec, {}, results(ALL_PASS[:-1]))

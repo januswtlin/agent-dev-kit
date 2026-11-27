@@ -1,16 +1,26 @@
 name: conductor
 
 # The reconciler on GitHub Actions. Stateless: every run observes GitHub and
-# dispatches whatever should happen next.
+# does whatever should happen next, including opening pull requests for pushed
+# branches.
+#
+# This job holds the pipeline's credentials, so two things are arranged so that
+# only the default branch's version of it can ever get them:
+#   - every trigger below runs the workflow file from the default branch
+#     (schedule, workflow_run, pull_request_target, issues, push to main), except
+#     workflow_dispatch, where the caller picks the ref
+#   - the credentials are secrets of the `conductor` ENVIRONMENT, whose deployment
+#     branch rule allows the default branch only. A run from any other ref, a
+#     manual dispatch included, is refused the secrets by GitHub itself.
+# There is deliberately no `pull_request` or `push`-to-branch trigger here: those
+# run the workflow file as it exists on the branch.
 #
 # The same program can run in a terminal instead (`agentctl conductor here`),
 # which costs no Actions minutes. While a local conductor holds the lease
 # (vars.CONDUCTOR_HOME == 'local'), event-triggered runs here are skipped; the
-# scheduled run still starts, and takes over if the lease has gone stale, for
-# example because the laptop was closed without `agentctl conductor away`.
+# scheduled run still starts, and takes over if the lease has gone stale.
 #
-# Events drive it; the schedule only catches stalls and missed events. Every run
-# is billed as at least one minute, so the schedule is deliberately sparse.
+# Every run is billed as at least one minute, so the schedule is deliberately sparse.
 #
 # Kill switch: set the repository variable CONDUCTOR_PAUSED to true.
 
@@ -20,18 +30,17 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Print the actions without executing them
+        description: Print the actions without executing them (creates nothing)
         type: boolean
         default: false
-  pull_request:
-    types: [closed, labeled]
-  pull_request_review:
-    types: [submitted]
+  workflow_run:
+    # `notify` fires when an agent pushes a branch; `risk-gate` re-runs on reviews.
+    workflows: [ci, risk-gate, notify]
+    types: [completed]
+  pull_request_target:
+    types: [closed]
   issues:
     types: [labeled, unlabeled]
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
   push:
     branches: [main]
     paths: ["docs/sprints/**", "docs/product/roadmap.md"]
@@ -51,6 +60,7 @@ jobs:
       (vars.CONDUCTOR_HOME != 'local' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
+    environment: conductor
     steps:
       - uses: actions/create-github-app-token@v1
         id: app
@@ -61,19 +71,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Reconcile
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
-          CONDUCTOR_HOME: ${{ vars.CONDUCTOR_HOME }}
-          CONDUCTOR_LEASE: ${{ vars.CONDUCTOR_LEASE }}
-          CONDUCTOR_QUOTA: ${{ vars.CONDUCTOR_QUOTA }}
+          # The conductor's own login, so that only its marker comments are believed.
+          CONDUCTOR_BOT: ${{ steps.app.outputs.app-slug }}[bot]
           # Dispatch credentials are per developer (CLAUDE_TRIGGER_URL_<LOGIN>, ...), so
-          # the whole secrets context is handed over. This job only runs code from the
-          # default branch.
+          # the whole secrets context of the environment is handed over.
           CONDUCTOR_SECRETS: ${{ toJSON(secrets) }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |

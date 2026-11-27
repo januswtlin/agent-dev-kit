@@ -17,7 +17,7 @@ deny() {
 # The patterns are literal regular expressions, so nothing in them should expand.
 # shellcheck disable=SC2016
 patterns=(
-  'rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+)+(/|~|\$HOME|\.\.)([[:space:]]|/|$)|recursive delete outside the repository'
+  'rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[[:space:]]+)+("|'"'"')?(/|~|\$HOME|\.\.)|recursive delete outside the repository'
   'git[[:space:]]+push[[:space:]].*(--force|-f([[:space:]]|$)|--force-with-lease)|force push'
   'git[[:space:]]+push[[:space:]].*[[:space:]](main|master)([[:space:]]|$)|push to the default branch'
   'git[[:space:]]+push[[:space:]].*(--delete|[[:space:]]:[^[:space:]])|deleting a remote branch'

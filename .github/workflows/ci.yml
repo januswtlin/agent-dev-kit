@@ -14,6 +14,9 @@ name: ci
 
 on:
   pull_request:
+    # Only pull requests into the default branch are judged. A status earned against
+    # some other base must not exist on a commit that later targets main.
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
@@ -104,27 +107,32 @@ jobs:
       - name: Results of the last green run on the base branch
         if: github.event_name == 'pull_request'
         run: |
-          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
-            --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
-          if [ -z "$run_id" ]; then
-            echo "::warning::no green ci run on $BASE_REF yet; cannot check that passing test cases were kept"
-          else
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
+            --limit 30 --json databaseId,conclusion,status)"
+          run_id="$(printf '%s' "$runs" | python3 -I -c 'import json,sys; r=[x for x in json.load(sys.stdin) if x["conclusion"]=="success"]; print(r[0]["databaseId"] if r else "")')"
+          total="$(printf '%s' "$runs" | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+          if [ -n "$run_id" ]; then
             gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n junit -D main-reports
+          elif [ "$total" = "0" ]; then
+            echo "::warning::$BASE_REF has never run ci; nothing to compare against yet"
+          else
+            echo "::error::$BASE_REF has ci runs but none of the last $total is green; fix $BASE_REF first"
+            exit 1
           fi
+      # The judge is the base branch's copy, started with -I: `python3 -m` would put the
+      # working directory (the pull request's tree) first on the import path.
       - name: Traceability
         working-directory: head
         env:
           AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
-          PYTHONPATH: ${{ github.workspace }}/base/tools
         run: |
           set -- --junit 'reports/junit/*.xml'
           [ -d ../main-reports ] && set -- "$@" --base-junit '../main-reports/junit/*.xml'
           [ -n "$HEAD_REF" ] && set -- "$@" --branch "$HEAD_REF"
-          python3 -m agentctl trace "$@"
+          python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" trace "$@"
       - name: Red-green
         if: github.event_name == 'pull_request'
         working-directory: head
         env:
           AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
-          PYTHONPATH: ${{ github.workspace }}/base/tools
-        run: python3 -m agentctl redgreen-judge --base-dir reports/base-overlay --junit 'reports/junit/*.xml' --branch "$HEAD_REF"
+        run: python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" redgreen-judge --base-dir reports/base-overlay --junit 'reports/junit/*.xml' --branch "$HEAD_REF"

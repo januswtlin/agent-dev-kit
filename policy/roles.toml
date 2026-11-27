@@ -5,7 +5,8 @@
 # own. Describe yours here; `scripts/init.sh` fills in the logins.
 #
 # Rules that hold for every shape:
-#   - a developer's stories run on that developer's own subscriptions
+#   - a developer's stories run on that developer's own subscriptions. Whose story
+#     it is comes from the sprint file (`assignee`, and `[owners]` for exceptions)
 #   - for every stage, harnesses are tried in order; one whose quota is exhausted
 #     is skipped until its window resets
 #   - the reviewer differs from the implementer whenever the list allows it
@@ -27,8 +28,9 @@ planner = "claude"
 # via = "sbx"      start a clone-mode Docker Sandbox on the developer's Mac. Needs
 #                  `agentctl conductor here` running on that Mac; while the
 #                  conductor is on GitHub Actions these stages simply wait
-# via = "workflow" run .github/workflows/agent-job.yml on the developer's self-hosted
-#                  runner inside their Lima VM (machine must be on)
+# via = "workflow" run .github/workflows/agent-job.yml on a self-hosted runner in the
+#                  developer's Lima VM. NOT part of the supported setup: that VM is
+#                  long-lived and shared between stages (sandbox/runner/README.md)
 #
 # Credentials are per developer: the conductor looks for NAME_<LOGIN> first (login
 # in upper case, other characters as "_"), then NAME.

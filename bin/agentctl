@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Thin launcher so `bin/agentctl <command>` works from anywhere in the repository.
+# -I keeps the current directory and PYTHONPATH off the import path (see tools/run.py).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHONPATH="$root/tools${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m agentctl "$@"
+exec python3 -I "$root/tools/run.py" "$@"

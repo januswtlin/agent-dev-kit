@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
   id-token: write
 
 concurrency:
@@ -34,9 +35,17 @@ jobs:
         run: |
           git fetch origin main --depth=200
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::tag is not on main"; exit 1; }
-          failed="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name=="ci" or .name=="security" or .name=="spec-verify") | select(.conclusion!="success")] | length')"
-          [ "$failed" = "0" ] || { echo "::error::required checks are not green on this commit"; exit 1; }
+          # Each named check must be PRESENT and green. Counting failures alone would
+          # also pass a commit on which the checks never ran.
+          runs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --jq '.check_runs[] | "\(.name) \(.conclusion)"')"
+          for name in ci security spec-verify; do
+            if ! printf '%s\n' "$runs" | grep -qx "$name success"; then
+              echo "::error::check '$name' did not succeed on this commit"; exit 1
+            fi
+            if printf '%s\n' "$runs" | grep "^$name " | grep -qv " success$"; then
+              echo "::error::check '$name' also has a run that is not green on this commit"; exit 1
+            fi
+          done
       - run: make setup && make build
 
       # --- AWS example -------------------------------------------------------

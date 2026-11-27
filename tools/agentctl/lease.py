@@ -7,31 +7,64 @@ Two repository variables make sure only one copy acts at a time:
     CONDUCTOR_HOME    "local" or "actions"
     CONDUCTOR_LEASE   epoch seconds of the local conductor's last completed run
 
-`agentctl conductor here` takes over and renews the lease on every pass.
-`agentctl conductor away` (or Ctrl-C) hands back to Actions. If the laptop is
-closed without handing over, the lease stops being renewed and the next
-scheduled Actions run takes over by itself.
+`agentctl conductor here` takes the lease (naming this process as the holder),
+renews it after every pass that worked, and stops as soon as the lease names
+someone else. `agentctl conductor away` (or Ctrl-C) hands back to Actions. If the
+laptop is closed without handing over, or the local passes keep failing, the
+lease stops being renewed and the next scheduled Actions run takes over.
+
+Repository variables are not a lock: there is no compare-and-set. Two conductors
+can overlap for one pass around a hand-over. Dispatches are recorded before they
+are sent and each stage waits for its marker to expire, so the cost of an
+overlap is at worst one duplicated dispatch, never a lost one.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
+
+
+def parse(value: str) -> tuple[float | None, str]:
+    """A lease is "<epoch seconds> <holder>". Returns (when, who)."""
+    parts = (value or "").split(None, 1)
+    try:
+        return float(parts[0]), (parts[1] if len(parts) > 1 else "")
+    except (IndexError, ValueError):
+        return None, ""
 
 
 def decide(home: str, lease: str, now: float, ttl_minutes: float) -> str:
     """What an Actions run should do: run | skip | takeover."""
     if (home or "actions").strip().lower() != "local":
         return "run"
-    try:
-        age = now - float(lease)
-    except (TypeError, ValueError):
+    when, _ = parse(lease)
+    if when is None:
         return "takeover"
-    return "skip" if age < ttl_minutes * 60 else "takeover"
+    return "skip" if now - when < ttl_minutes * 60 else "takeover"
+
+
+def still_mine(home: str, lease: str, holder: str) -> bool:
+    """A local conductor keeps going only while the lease names it."""
+    return (home or "").strip().lower() == "local" and parse(lease)[1] == holder
+
+
+def conductor_env_path(repo: Path) -> Path:
+    """Where the local conductor's dispatch credentials live: outside the repository.
+
+    A clone-mode sandbox sees the whole repository directory read-only, ignored
+    files included, so a .env file in the project would be readable by every agent.
+    """
+    from .apptoken import repo_from_remote
+    remote = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, cwd=repo).stdout
+    slug = (repo_from_remote(remote) or repo.name).replace("/", "-")
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "agent-dev" / slug / "conductor.env"
 
 
 def load_env_file(path: Path) -> dict[str, str]:
-    """Read KEY=VALUE lines (dispatch secrets for local runs). The file is git-ignored."""
+    """Read KEY=VALUE lines (dispatch secrets for local runs)."""
     values: dict[str, str] = {}
     if not path.exists():
         return values

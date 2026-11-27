@@ -82,7 +82,8 @@ def cmd_trace(args) -> int:
     story = args.story or _story_from_branch(args.branch or _current_branch())
     head = trace.parse_junit(args.junit)
     base = trace.parse_junit(args.base_junit) if args.base_junit else None
-    return _finish("traceability", trace.check(all_specs, head, story, base))
+    retired = specs.load_retired(root / "docs/specs")
+    return _finish("traceability", trace.check(all_specs, head, story, base, retired))
 
 
 def cmd_redgreen(args) -> int:
@@ -114,8 +115,11 @@ def cmd_redgreen_collect(args) -> int:
         return 0
     overlay = redgreen.test_files_to_overlay(root, args.base, all_specs[story], project.get("test_paths", []))
     print("overlaying on base:", ", ".join(overlay) or "(nothing)")
-    redgreen.run_on_base(root, args.base, overlay, project["test_cmd"], project["junit_glob"], out_dir=out)
-    (out / "collected.json").write_text(json.dumps({"story": story, "base": args.base, "overlay": overlay}), encoding="utf-8")
+    redgreen.run_on_base(root, args.base, overlay, project["test_cmd"], project["junit_glob"], out_dir=out,
+                         setup_cmd=project.get("setup_cmd", ""))
+    reports = len(list(out.glob("*.xml")))
+    (out / "collected.json").write_text(json.dumps({"story": story, "base": args.base, "overlay": overlay, "reports": reports}),
+                                        encoding="utf-8")
     return 0
 
 
@@ -132,8 +136,9 @@ def cmd_redgreen_judge(args) -> int:
     # absent collection step must not be mistaken for that.
     if not marker.exists() or json.loads(marker.read_text(encoding="utf-8")).get("story") != story:
         return _finish("red-green", [f"no base results for story {story}: the collection step did not run"])
+    reports = len(list(base_dir.glob("*.xml")))
     return _finish("red-green", redgreen.check(all_specs[story], trace.parse_junit([str(base_dir / "*.xml")]),
-                                               trace.parse_junit(args.junit)))
+                                               trace.parse_junit(args.junit), base_report_count=reports))
 
 
 def cmd_evidence(args) -> int:
@@ -151,7 +156,8 @@ def _reconcile_once(root: Path, dry_run: bool) -> int:
 
     policy = _toml(root / "policy/conductor.toml")
     roles = _toml(root / "policy/roles.toml")
-    state, context = github.collect(root)
+    # A dry run reads and prints. It creates nothing, not even the tracking issues.
+    state, context = github.collect(root, roles, read_only=dry_run)
     actions = reconcile.plan(state, policy, roles)
     if not actions:
         print("nothing to do")
@@ -164,8 +170,9 @@ def cmd_reconcile(args) -> int:
     root = _root()
     if args.respect_lease:
         # On GitHub Actions: stand down while a local conductor holds a fresh lease.
+        # The variables are read now, not taken from the moment the job was queued.
         ttl = _toml(root / "policy/conductor.toml").get("local_lease_minutes", 20)
-        verdict = lease.decide(os.environ.get("CONDUCTOR_HOME", ""), os.environ.get("CONDUCTOR_LEASE", ""), time.time(), ttl)
+        verdict = lease.decide(github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE"), time.time(), ttl)
         if verdict == "skip":
             print("a local conductor holds the lease; nothing to do here")
             return 0
@@ -175,16 +182,58 @@ def cmd_reconcile(args) -> int:
     return 1 if _reconcile_once(root, args.dry_run) else 0
 
 
+def _conductor_identity(repo: Path) -> tuple[str, str, str]:
+    """Make this process act on GitHub as the Conductor App, like the Actions job does.
+
+    Acting as the developer instead would make them the author of the pull
+    requests the conductor opens, and GitHub does not let an author approve
+    their own pull request.
+    """
+    env_path = lease.conductor_env_path(repo)
+    settings = lease.load_env_file(env_path)
+    missing = [k for k in ("CONDUCTOR_APP_ID", "CONDUCTOR_APP_KEY", "DEVELOPER") if not settings.get(k)]
+    if missing:
+        raise SystemExit(f"{env_path} must define {', '.join(missing)}. See docs/operations.md, section 1.")
+    os.environ.update(settings)
+    remote = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, cwd=repo).stdout
+    full_name = apptoken.repo_from_remote(remote)
+    if not full_name:
+        raise SystemExit("origin is not a GitHub repository")
+    slug = apptoken.app_slug(settings["CONDUCTOR_APP_ID"], settings["CONDUCTOR_APP_KEY"])
+    os.environ["CONDUCTOR_BOT"] = f"{slug}[bot]"
+    os.environ["CONDUCTOR_LOCAL_DEVELOPER"] = settings["DEVELOPER"]
+    os.environ["GH_REPO"] = full_name
+    return settings["CONDUCTOR_APP_ID"], settings["CONDUCTOR_APP_KEY"], full_name
+
+
+def _as_conductor(app_id: str, key: str, full_name: str) -> None:
+    os.environ["GH_TOKEN"] = apptoken.installation_token(app_id, key, full_name, profile="conductor")
+
+
 def cmd_conductor(args) -> int:
     """Run the conductor in this terminal, or hand it back to GitHub Actions."""
+    import socket
+
     from . import github
 
     repo = _root()
+    # The conductor runs with this user's permissions and the pipeline's credentials.
+    # Refuse to start from a checkout whose tooling is not the default branch's.
+    default = subprocess.run(["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+                             capture_output=True, text=True, cwd=repo).stdout.strip() or "origin/main"
+    differs = subprocess.run(["git", "diff", "--quiet", default, "--", "tools", "bin", "sandbox", "policy"], cwd=repo).returncode != 0
+    if differs and os.environ.get("AGENT_ALLOW_MODIFIED_SCRIPTS") != "1":
+        raise SystemExit(f"tools/, bin/, sandbox/ or policy/ differ from {default}. Run the conductor from a clean "
+                         "checkout of the default branch, not from a branch under review.")
+    app_id, key, full_name = _conductor_identity(repo)
+    _as_conductor(app_id, key, full_name)
+
     if args.where == "status":
-        home = github.gh("variable", "get", "CONDUCTOR_HOME", check=False).strip() or "actions"
-        stamp = github.gh("variable", "get", "CONDUCTOR_LEASE", check=False).strip()
-        age = f", last local pass {int((time.time() - float(stamp)) / 60)} min ago" if stamp.replace(".", "").isdigit() else ""
-        print(f"conductor runs on: {home}{age}")
+        home = github.variable("CONDUCTOR_HOME") or "actions"
+        when, holder = lease.parse(github.variable("CONDUCTOR_LEASE"))
+        age = f", last local pass {int((time.time() - when) / 60)} min ago by {holder or 'unknown'}" if when else ""
+        paused = " (PAUSED)" if github.variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes") else ""
+        print(f"conductor runs on: {home}{age}{paused}")
         return 0
     if args.where == "away":
         github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
@@ -192,24 +241,42 @@ def cmd_conductor(args) -> int:
         print("handed over to GitHub Actions")
         return 0
 
-    os.environ.update(lease.load_env_file(repo / ".env.conductor"))
+    holder = f"{socket.gethostname()}:{os.getpid()}"
     # Local sandboxes clone this repository, but are set up by the scripts on the
     # default branch, never by whatever branch happens to be checked out here.
     os.environ["AGENT_PROJECT_DIR"] = str(repo)
+
+    def renew() -> None:
+        github.gh("variable", "set", "CONDUCTOR_LEASE", "--body", f"{int(time.time())} {holder}")
+
+    # Publish the lease before claiming the role, so that Actions never sees
+    # "local" together with a stale lease and takes over at once.
+    renew()
     github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "local")
-    print(f"conductor is running here, every {args.interval}s. Ctrl-C hands over to GitHub Actions.")
+    print(f"conductor is running here as {os.environ['CONDUCTOR_BOT']}, every {args.interval}s. Ctrl-C hands over to GitHub Actions.")
+    failures = 0
     try:
         while True:
-            if github.gh("variable", "get", "CONDUCTOR_HOME", check=False).strip() != "local":
-                print("another conductor took over; stopping")
+            _as_conductor(app_id, key, full_name)
+            if not lease.still_mine(github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE"), holder):
+                print("another conductor holds the lease; stopping")
                 return 0
             try:
                 trusted = lease.fresh_main_checkout(repo)
                 os.environ["AGENTCTL_TRUSTED_SCRIPTS"] = str(trusted)
-                _reconcile_once(trusted, args.dry_run)
+                failed = _reconcile_once(trusted, args.dry_run)
             except (subprocess.CalledProcessError, OSError, SystemExit) as exc:
-                print(f"pass failed: {exc}")  # keep going; the next pass starts from scratch
-            github.gh("variable", "set", "CONDUCTOR_LEASE", "--body", str(int(time.time())), check=False)
+                print(f"pass failed: {exc}")
+                failed = 1
+            # Renew only after a pass that worked. A conductor that keeps failing must
+            # not keep Actions standing down while nothing advances.
+            failures = failures + 1 if failed else 0
+            if failures == 0:
+                renew()
+            elif failures >= 3:
+                github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions", check=False)
+                print("three passes in a row failed; handed over to GitHub Actions")
+                return 1
             time.sleep(args.interval)
     except KeyboardInterrupt:
         github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions", check=False)
@@ -238,6 +305,12 @@ def cmd_app_token(args) -> int:
         print(f"username=x-access-token\npassword={token}")
     else:
         print(token)
+    return 0
+
+
+def cmd_repo_name(args) -> int:
+    """owner/name of a GitHub remote URL; empty when it is not one."""
+    print(apptoken.repo_from_remote(args.url) or "")
     return 0
 
 
@@ -282,7 +355,8 @@ def cmd_budget(args) -> int:
 def cmd_status(args) -> int:
     from . import github
 
-    state, context = github.collect(_root())
+    root = _root()
+    state, context = github.collect(root, _toml(root / "policy/roles.toml"), read_only=True)
     summary = _status_summary(state, context)
     if args.markdown:
         print(_status_markdown(summary))
@@ -386,6 +460,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--profile", choices=sorted(profiles.TOKEN_PERMISSIONS), default="write",
                    help="permission set: write (push) or read (cannot push)")
     p.set_defaults(func=cmd_app_token)
+
+    p = sub.add_parser("repo-name", help="print owner/name for a GitHub remote URL")
+    p.add_argument("url")
+    p.set_defaults(func=cmd_repo_name)
 
     p = sub.add_parser("stage-profile", help="print the token scope, network and settings a stage's sandbox gets")
     p.add_argument("stage")

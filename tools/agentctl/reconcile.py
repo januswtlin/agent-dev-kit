@@ -34,6 +34,7 @@ class PR:
     # Story pull requests open as drafts. A draft only gets the cheap checks; the
     # full gates run once the conductor marks it ready, after the impl stage.
     draft: bool = False
+    head_sha: str = ""
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Dispatch:
     at: float  # epoch seconds
     harness: str = ""
     attempt: int = 1
+    sha: str = ""  # the pull request's head when this was dispatched
 
 
 @dataclass
@@ -88,11 +90,13 @@ class State:
     roadmap_pending: int = 0  # roadmap lines that have no spec yet
     open_spec_prs: int = 0  # spec pull requests waiting for the director
     last_po_dispatch: float | None = None
+    merged_elsewhere: set[str] = field(default_factory=set)  # stories merged in an earlier sprint
+    unopened_branches: list[str] = field(default_factory=list)  # agent branches with no pull request yet
 
 
 @dataclass(frozen=True)
 class Action:
-    kind: str  # dispatch | mark-ready | update-branch | enable-auto-merge | escalate | notify | halt | draft-next-sprint
+    kind: str  # dispatch | open-pr | mark-ready | update-branch | enable-auto-merge | escalate | notify | halt | draft-next-sprint
     story: str = ""
     stage: str = ""
     harness: str = ""
@@ -132,27 +136,45 @@ def _timeout(policy: dict, stage: str) -> float:
     return 60.0 * timeouts.get(stage, timeouts.get("default", 90))
 
 
+BUILD_STAGES = ["design", "tests", "impl"]  # report by label; review reports by commit status
+
+
 def _in_flight(story: Story) -> bool:
-    """True while the last dispatched session has not reported its outcome."""
+    """True while the last dispatched session has not reported its outcome.
+
+    Sessions that work on an existing pull request (fix, conflict resolution,
+    review) are tied to the commit they were dispatched for: they are done when
+    the branch has moved on, or, for a review, when that commit has a verdict.
+    Tying them to a label instead would let a stale label hide a running session,
+    or a missing one launch the same fix again on every pass.
+    """
     d = story.last_dispatch
     if d is None:
         return False
-    if d.stage in STAGES:
+    pr = story.pr
+    if d.stage in BUILD_STAGES:
         return d.stage not in story.stage_done
-    if d.stage == "fix":
-        # The fixing agent clears `done:review` when it finishes, to request a new review.
-        return "review" in story.stage_done
-    if d.stage == "resolve-conflict":
-        return bool(story.pr and story.pr.conflicted)
+    if d.stage in ("fix", "resolve-conflict"):
+        return bool(pr and d.sha and pr.head_sha == d.sha)
+    if d.stage == "review":
+        return bool(pr and d.sha and pr.head_sha == d.sha and pr.checks.get(REVIEW_CHECK, "pending") == "pending")
     if d.stage == "triage":
         return story.triage_verdict is None and "needs-human" not in story.labels
     return False
 
 
 def _human_blocked(story: Story) -> bool:
+    """Waiting for a person: an explicit label, a requested review, or a T2 approval."""
     if "needs-human" in story.labels or "blocked" in story.labels:
         return True
-    return bool(story.pr and story.pr.awaiting_human_review and _checks_state(story.pr, MECHANICAL_CHECKS) != "failure")
+    pr = story.pr
+    if not pr or pr.draft:
+        return False
+    mechanical = _checks_state(pr, [c for c in MECHANICAL_CHECKS if c != "risk-gate"])
+    if mechanical != "success" or pr.checks.get(REVIEW_CHECK, "pending") != "success":
+        return False
+    # Everything a machine can decide is green; what is left is a person's approval.
+    return pr.awaiting_human_review or pr.checks.get("risk-gate", "pending") == "failure"
 
 
 def _checks_state(pr: PR, names: list[str]) -> str:
@@ -195,7 +217,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
     # A broken plan stops the whole sprint: nothing is dispatched until a human fixes it.
     broken = None
     for story in sorted(stories.values(), key=lambda s: s.id):
-        missing = sorted(d for d in story.deps if d not in stories)
+        missing = sorted(d for d in story.deps if d not in stories and d not in state.merged_elsewhere)
         if missing:
             broken = f"story {story.id} depends on story {missing[0]}, which is not in the sprint"
             break
@@ -213,10 +235,25 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         spec_work.append(Action("dispatch", stage="product-owner", harness=roles.get("planner", "claude"), attempt=1,
                                 reason=f"{state.roadmap_pending} roadmap item(s) without a spec"))
 
+    # Pushed branches get their pull request from the conductor, so that its author
+    # is the conductor and a human can approve it.
+    budget = policy["max_prs_per_day"] - state.prs_opened_today
+    opened: list[Action] = []
+    for branch in state.unopened_branches:
+        is_story = branch.startswith("story/")
+        if is_story and budget <= 0:
+            continue
+        opened.append(Action("open-pr", reason=branch))
+        budget -= 1 if is_story else 0
+
     if state.main_red:
         if not state.main_fix_in_flight:
-            return [Action("dispatch", stage="fix-main", harness="claude", attempt=1, reason="main is red"), *spec_work]
-        return spec_work
+            return [Action("dispatch", stage="fix-main", harness=roles.get("planner", "claude"), attempt=1, reason="main is red"),
+                    *opened, *spec_work]
+        return [*opened, *spec_work]
+
+    def satisfied(dep: str) -> bool:
+        return dep in state.merged_elsewhere or (dep in stories and stories[dep].done)
 
     waiting = 0  # stories legitimately waiting on a running session, a check or quota
 
@@ -244,8 +281,11 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             continue
         d = story.last_dispatch
 
+        if not all(satisfied(dep) for dep in story.deps):
+            continue  # a dependency was added after it started (triage); it waits for that story
+
         if story.triage_verdict == "retry" and d is not None and d.stage == "triage":
-            stage = next((s for s in STAGES if s not in story.stage_done), "review")
+            stage = next((s for s in BUILD_STAGES if s not in story.stage_done), "review")
             dispatch(story, stage, 1, "triage asked for a retry")
             continue
 
@@ -262,14 +302,16 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             dispatch(story, "resolve-conflict", 1, "merge conflict with main")
             continue
 
-        next_stage = next((s for s in STAGES if s not in story.stage_done), None)
-
-        if next_stage in ("design", "tests", "impl"):
+        next_stage = next((s for s in BUILD_STAGES if s not in story.stage_done), None)
+        if next_stage:
             dispatch(story, next_stage, 1)
             continue
 
         if pr is None:
-            actions.append(Action("escalate", story=story.id, reason="stages reported done but no pull request exists"))
+            if any(b.startswith(f"story/{story.id}") for b in state.unopened_branches):
+                waiting += 1  # its pull request is being opened in this same run
+            else:
+                actions.append(Action("escalate", story=story.id, reason="stages reported done but no branch or pull request exists"))
             continue
 
         if pr.draft:
@@ -289,26 +331,27 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             waiting += 1
             continue
 
-        if next_stage == "review":
+        # The review verdict is a status on the commit, so a new push needs a new review.
+        review = pr.checks.get(REVIEW_CHECK, "pending")
+        if review == "pending":
             dispatch(story, "review", 1)
             continue
-
-        review = pr.checks.get(REVIEW_CHECK, "pending")
         if review == "failure":
             if story.fix_rounds < policy["max_fix_rounds"]:
                 dispatch(story, "fix", 1, "agent review requested changes")
             else:
                 actions.append(Action("escalate", story=story.id, reason="review still failing after the fix-round limit"))
             continue
-        if review == "pending":
-            waiting += 1
-            continue
 
         if pr.behind:
             actions.append(Action("update-branch", story=story.id, reason="branch is behind main"))
             continue
-        if pr.awaiting_human_review:
-            continue  # T2: sits in the director's review queue
+        risk = pr.checks.get("risk-gate", "pending")
+        if risk == "pending":
+            waiting += 1
+            continue
+        if pr.awaiting_human_review or risk == "failure":
+            continue  # T2 or an owned path: it sits in a person's review queue
         if pr.auto_merge:
             waiting += 1
             continue
@@ -329,10 +372,9 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         s for s in stories.values()
         if not s.started and not s.done
         and "needs-human" not in s.labels and "blocked" not in s.labels
-        and all(stories[d].done for d in s.deps)
+        and all(satisfied(d) for d in s.deps)
     ]
     candidates.sort(key=lambda s: (s.priority, -dependents[s.id], s.id))
-    budget = policy["max_prs_per_day"] - state.prs_opened_today
     for story in candidates:
         if wip >= policy["wip_limit"] or budget <= 0:
             break
@@ -355,6 +397,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         actions.append(Action("draft-next-sprint", reason=f"{finished}/{total} stories merged"))
 
     stalled_before_spec_work = not (waiting > 0 or bool(actions))
+    actions[:0] = opened
     actions.extend(spec_work)
     # Anything done in this run (including an escalation, which already notifies a
     # human) counts as movement; the stall notice is for a run with nothing left to do.

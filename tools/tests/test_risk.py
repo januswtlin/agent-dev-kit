@@ -60,9 +60,25 @@ class RiskTests(unittest.TestCase):
         self.assertEqual(tier(["src/a.py"], lines=601).tier, "T2")
         self.assertEqual(tier([f"src/f{i}.py" for i in range(41)], lines=1).tier, "T2")
 
-    def test_lock_files_do_not_count_for_size(self):
-        changes = [Change("web/pnpm-lock.yaml", 5000, 4000), Change("src/a.py", 5, 0)]
-        self.assertEqual(assess(changes, POLICY, True).tier, "T1")
+    def test_lock_files_do_not_count_for_size_but_are_a_dependency_change(self):
+        result = assess([Change("web/pnpm-lock.yaml", 5000, 4000), Change("src/a.py", 5, 0)], POLICY, True)
+        self.assertEqual(result.tier, "T2")
+        self.assertTrue(any("dependency_manifests" in r for r in result.reasons))
+        self.assertFalse(any(r.startswith("size") for r in result.reasons))
+
+    def test_a_lock_file_alone_is_t2(self):
+        for path in ["package-lock.json", "api/uv.lock", "go.sum"]:
+            self.assertEqual(tier([path]).tier, "T2", path)
+
+    def test_scanner_configuration_is_a_guardrail(self):
+        for path in [".gitleaks.toml", ".gitleaksignore", ".semgrepignore", ".gitattributes"]:
+            self.assertEqual(tier([path]).tier, "T2", path)
+
+    def test_codeowners_covers_every_guardrail_and_dependency_pattern_family(self):
+        owners = (Path(__file__).resolve().parents[2] / ".github/CODEOWNERS").read_text()
+        for needle in ["/.github/", "/policy/", "/tools/", "/sandbox/", "/prompts/", "/.claude/", "/AGENTS.md",
+                       "/.gitleaks.toml", "package-lock.json", "uv.lock", "go.sum", "/docs/specs/"]:
+            self.assertIn(needle, owners, needle)
 
     def test_one_risky_file_taints_the_whole_change(self):
         self.assertEqual(tier(["docs/a.md", "src/auth/session.py"]).tier, "T2")

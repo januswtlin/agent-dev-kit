@@ -33,6 +33,14 @@ guardrails = [
   "AGENTS.md",
   "CLAUDE.md",
   "Makefile",
+  # Configuration that the scanners in the security check read from the tree.
+  # A pull request must not be able to switch its own scanner off.
+  ".gitleaks.toml",
+  ".gitleaksignore",
+  ".semgrepignore",
+  ".semgrep.yml",
+  ".semgrep/**",
+  ".gitattributes",
 ]
 
 # Approved by the product owner: specs, sprints, product documents.
@@ -60,4 +68,13 @@ dependency_manifests = [
   "**/Gemfile",
   "**/pom.xml",
   "**/build.gradle*",
+  # Lock files change what is installed just as much as the manifests do.
+  "**/package-lock.json",
+  "**/pnpm-lock.yaml",
+  "**/yarn.lock",
+  "**/uv.lock",
+  "**/poetry.lock",
+  "**/Cargo.lock",
+  "**/go.sum",
+  "**/Gemfile.lock",
 ]

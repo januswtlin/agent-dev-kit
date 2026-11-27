@@ -35,14 +35,19 @@ triage = 30
 product-owner = 60
 
 # GitHub Actions budget. `agentctl budget` estimates month-to-date spend from job
-# records and moves the heavy jobs (ci, security) to the self-hosted runner in the
-# sandbox VM when it passes overflow_at. Jobs that judge a pull request never move.
+# records and reports it in the daily brief.
+#
+# Overflow: when `overflow_runner` is set, the heavy jobs (ci, security) move to
+# that runner once spend passes overflow_at. It is EMPTY by default, on purpose.
+# Those jobs execute pull request code. The runner they move to must be dedicated
+# to them, hold no credentials or logins, and be recreated for every job. The
+# Lima VM in sandbox/ does not qualify. Jobs that judge a pull request never move.
 # Prices and the allowance change; check GitHub's billing pages and adjust.
 [actions]
 monthly_allowance_usd = 18.0          # GitHub Team
 overflow_at = 0.85
 hosted_runner = "ubuntu-latest"
-overflow_runner = ["self-hosted", "agent-sandbox"]
+overflow_runner = []                  # e.g. ["self-hosted", "ci-ephemeral"]
 light_labels = ["ubuntu-slim"]        # runner labels billed at the "light" price
 
 [actions.price_per_minute]

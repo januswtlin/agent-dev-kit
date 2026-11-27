@@ -74,6 +74,11 @@ def _call(method: str, url: str, bearer: str, body: dict | None = None) -> dict:
         return json.loads(response.read())
 
 
+def app_slug(app_id: str, key_path: str | Path) -> str:
+    """The App's slug; its comments are authored by "<slug>[bot]"."""
+    return _call("GET", f"{API}/app", make_jwt(app_id, key_path))["slug"]
+
+
 def _fresh(cached: dict, repo: str, app_id: str, now: float, margin: float = 300) -> bool:
     return (cached.get("repo") == repo and str(cached.get("app_id")) == str(app_id)
             and float(cached.get("expires", 0)) - now > margin)

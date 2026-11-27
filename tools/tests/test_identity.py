@@ -109,26 +109,123 @@ class SandboxCheckTests(unittest.TestCase):
             self.assertEqual(sorted(Path(p).name for p in doctor.private_host_paths(users)), [".ssh", "Documents"])
             self.assertEqual(doctor.private_host_paths(Path(tmp) / "missing"), [])
 
-    def test_local_sandbox_stages_wait_when_the_conductor_is_on_actions(self):
+    def test_a_path_under_users_is_private_only_if_it_is_a_private_folder(self):
+        from agentctl import doctor
+        self.assertEqual(doctor.private_host_paths(Path("/nonexistent")), [])
+
+
+class Recorder:
+    """Stands in for the gh CLI: records calls, can be told to fail some."""
+
+    def __init__(self, fail=()):
+        self.calls, self.fail = [], fail
+
+    def __call__(self, *args, check=True, token=None):
+        self.calls.append(args)
+        if any(args[:len(f)] == f for f in self.fail):
+            raise subprocess.CalledProcessError(1, "gh", stderr="boom")
+        return ""
+
+
+class DispatchTests(unittest.TestCase):
+    CONTEXT = {"issues": {"001": 2}, "sprint_issue": 1, "sprint": "001", "specs": {}, "prs": {"001": 7},
+               "shas": {"001": "abc"}, "assignees": {"001": "alice"}, "default_branch": "main", "repo": "o/r"}
+
+    def setUp(self):
+        self.saved_env, self.saved_gh = dict(os.environ), github.gh
+        for name in ("GITHUB_ACTIONS", "CONDUCTOR_SECRETS", "CONDUCTOR_LOCAL_DEVELOPER", "AGENTCTL_TRUSTED_SCRIPTS"):
+            os.environ.pop(name, None)
+
+    def tearDown(self):
+        github.gh = self.saved_gh
+        os.environ.clear()
+        os.environ.update(self.saved_env)
+
+    def run_actions(self, roles, action, fail=()):
         from agentctl.reconcile import Action
-        saved = dict(os.environ)
+        github.gh = Recorder(fail)
+        failures = github.execute([Action("dispatch", story="001", **action)], self.CONTEXT, roles)
+        return failures, github.gh.calls
+
+    def test_the_marker_is_written_before_the_work_is_sent_and_carries_the_commit(self):
+        os.environ["DISPATCH_TOKEN_ALICE"] = "t"
+        roles = {"harness": {"codex": {"via": "comment"}}}
+        failures, calls = self.run_actions(roles, dict(stage="impl", harness="codex", attempt=1))
+        self.assertEqual(failures, 0)
+        comments = [c for c in calls if c[:2] == ("issue", "comment")]
+        self.assertIn("<!-- conductor ", comments[0][4])
+        self.assertIn('"sha": "abc"', comments[0][4])
+        self.assertTrue(comments[1][4].startswith("@codex "))
+        self.assertEqual(comments[1][2], "7")  # sent to the pull request the conductor already knows
+        self.assertIn(("issue", "edit", "2", "--remove-label", "done:impl"), calls)
+
+    def test_a_failed_send_withdraws_its_marker(self):
+        roles = {"harness": {"claude": {"via": "workflow"}}}
+        failures, calls = self.run_actions(roles, dict(stage="impl", harness="claude", attempt=1),
+                                           fail=[("workflow", "run")])
+        self.assertEqual(failures, 1)
+        bodies = [c[4] for c in calls if c[:2] == ("issue", "comment")]
+        marker_id = json.loads(github.MARKER_RE.findall(bodies[0])[0])["id"]
+        self.assertEqual(json.loads(github.MARKER_RE.findall(bodies[1])[0]), {"cancel": marker_id})
+        self.assertEqual(github.read_markers(bodies), [])  # so the next pass plans it again
+
+    def test_a_stage_that_has_to_wait_leaves_nothing_behind(self):
+        roles = {"harness": {"ollama": {"via": "sbx"}}}
         os.environ["GITHUB_ACTIONS"] = "true"
-        try:
-            roles = {"harness": {"ollama": {"via": "sbx"}}}
-            context = {"issues": {"001": 2}, "sprint_issue": 1, "sprint": "001", "specs": {}, "prs": {}, "assignees": {}}
-            action = Action("dispatch", story="001", stage="impl", harness="ollama", attempt=1)
-            with self.assertRaises(github.Deferred):
-                github._send(action, context, roles)
-            # Deferred is not a failure: the run stays green and no marker is written.
-            self.assertEqual(github.execute([action], context, roles), 0)
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
+        failures, calls = self.run_actions(roles, dict(stage="impl", harness="ollama", attempt=1))
+        self.assertEqual((failures, calls), (0, []))
+        # On another developer's Mac it waits too.
+        del os.environ["GITHUB_ACTIONS"]
+        os.environ.update(CONDUCTOR_LOCAL_DEVELOPER="bob", AGENTCTL_TRUSTED_SCRIPTS="/x")
+        failures, calls = self.run_actions(roles, dict(stage="impl", harness="ollama", attempt=1))
+        self.assertEqual((failures, calls), (0, []))
+
+    def test_missing_credentials_fail_before_anything_is_written(self):
+        roles = {"harness": {"claude": {"via": "http"}, "codex": {"via": "comment"}}}
+        for harness in ("claude", "codex"):
+            failures, calls = self.run_actions(roles, dict(stage="impl", harness=harness, attempt=1))
+            self.assertEqual((failures, calls), (1, []), harness)
+
+    def test_bad_names_never_reach_a_shell_or_a_path(self):
+        roles = {"harness": {"x": {"via": "workflow"}}}
+        failures, calls = self.run_actions(roles, dict(stage="impl; rm -rf /", harness="x", attempt=1))
+        self.assertEqual((failures, calls), (1, []))
+
+
+class ObservationTests(unittest.TestCase):
+    def test_only_trusted_authors_markers_count(self):
+        issue = {"comments": [
+            {"author": {"login": "conductor[bot]"}, "body": '<!-- conductor {"id":"a","stage":"impl","at":1} -->'},
+            {"author": {"login": "alice-agent[bot]"}, "body": '<!-- conductor {"id":"b","stage":"review","at":2} -->'},
+            {"author": {"login": "alice-agent[bot]"}, "body": '<!-- conductor {"cancel":"a"} -->'},
+        ]}
+        bodies = github._comments_by(issue, {"conductor[bot]", "alice"})
+        self.assertEqual([m["stage"] for m in github.read_markers(bodies)], ["impl"])
+
+    def test_the_storys_pull_request_is_open_same_repo_and_into_the_default_branch(self):
+        def pr(number, state, head="story/012-x", base="main", cross=False):
+            return {"number": number, "state": state, "headRefName": head, "baseRefName": base, "isCrossRepository": cross}
+        prs = [pr(5, "MERGED"), pr(9, "CLOSED"), pr(8, "OPEN", base="other"), pr(7, "OPEN", cross=True),
+               pr(6, "OPEN"), pr(4, "OPEN", head="story/0123-x"), pr(3, "OPEN", head="story/013-y")]
+        self.assertEqual(github.select_pr(prs, "012", "main")["number"], 6)
+        self.assertEqual(github.select_pr([p for p in prs if p["number"] != 6], "012", "main")["number"], 5)
+        self.assertIsNone(github.select_pr([pr(9, "CLOSED")], "012", "main"))
+
+    def test_branches_without_a_pull_request_for_their_tip(self):
+        prs = [{"headRefName": "story/001-a", "headRefOid": "old", "state": "MERGED", "isCrossRepository": False},
+               {"headRefName": "spec/002-b", "headRefOid": "s2", "state": "OPEN", "isCrossRepository": False}]
+        branches = [("main", "m"), ("story/001-a", "new"), ("spec/002-b", "s3"), ("chore/x", "c"),
+                    ("feature/y", "f"), ("story/bad name;rm", "z")]
+        # 001 has new commits after its merged PR; the spec's PR is still open; feature/* is not ours.
+        self.assertEqual(github.unopened_branches(branches, prs, "main"), ["chore/x", "story/001-a"])
 
 
 class StageProfileTests(unittest.TestCase):
     def test_only_stages_that_deliver_code_or_specs_can_push(self):
         from agentctl import profiles
+        # Nobody but the conductor can both push and act on pull requests.
+        for name, perms in profiles.TOKEN_PERMISSIONS.items():
+            self.assertFalse(perms["contents"] == "write" and perms["pull_requests"] == "write", name)
         can_push = {s for s in profiles.STAGE_PROFILES if profiles.for_stage(s)["token"] == "write"}
         self.assertEqual(can_push, {"design", "tests", "impl", "fix", "resolve-conflict", "fix-main", "product-owner", "planner"})
         for stage in ("review", "triage"):
@@ -158,6 +255,7 @@ class StageProfileTests(unittest.TestCase):
         from agentctl import profiles
         body = apptoken.request_body("acme/app", profiles.TOKEN_PERMISSIONS["read"])
         self.assertEqual(body, {"repositories": ["app"], "permissions": {"contents": "read", "pull_requests": "write", "issues": "write"}})
+        self.assertEqual(profiles.TOKEN_PERMISSIONS["write"]["pull_requests"], "read")
         self.assertNotEqual(apptoken.cache_path("read"), apptoken.cache_path("write"))
 
     def test_registries_are_not_in_the_base_allowlist(self):

@@ -24,6 +24,28 @@
 /AGENTS.md          @DIRECTOR_LOGIN
 /CLAUDE.md          @DIRECTOR_LOGIN
 /Makefile           @DIRECTOR_LOGIN
+/.gitleaks.toml     @DIRECTOR_LOGIN
+/.gitleaksignore    @DIRECTOR_LOGIN
+/.semgrepignore     @DIRECTOR_LOGIN
+/.semgrep.yml       @DIRECTOR_LOGIN
+/.semgrep/          @DIRECTOR_LOGIN
+/.gitattributes     @DIRECTOR_LOGIN
+
+# Dependencies: manifests and lock files, anywhere in the tree.
+package.json        @DIRECTOR_LOGIN
+package-lock.json   @DIRECTOR_LOGIN
+pnpm-lock.yaml      @DIRECTOR_LOGIN
+yarn.lock           @DIRECTOR_LOGIN
+pyproject.toml      @DIRECTOR_LOGIN
+uv.lock             @DIRECTOR_LOGIN
+poetry.lock         @DIRECTOR_LOGIN
+requirements*.txt   @DIRECTOR_LOGIN
+go.mod              @DIRECTOR_LOGIN
+go.sum              @DIRECTOR_LOGIN
+Cargo.toml          @DIRECTOR_LOGIN
+Cargo.lock          @DIRECTOR_LOGIN
+Gemfile             @DIRECTOR_LOGIN
+Gemfile.lock        @DIRECTOR_LOGIN
 
 # High-risk code. Adjust once the code layout exists.
 **/auth/**          @DIRECTOR_LOGIN

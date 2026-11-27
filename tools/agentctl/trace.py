@@ -73,12 +73,15 @@ def check(
     head: dict[str, TcResult],
     story: str | None = None,
     base: dict[str, TcResult] | None = None,
+    retired: set[str] | None = None,
 ) -> list[str]:
     """Return a list of traceability violations (empty means the check passes).
 
     - The story under work must have every TC passing.
     - Any other story is all-or-nothing: once one of its TCs has a test, all must pass.
-    - A TC that passed on the base branch must still pass (no silent deletion).
+    - A TC that passed on the base branch must still pass, even if its spec was
+      deleted in the same change. The only way out is to list it in
+      docs/specs/retired.toml, which a human approves.
     - A TC id used in tests must exist in an approved spec.
     """
     problems: list[str] = []
@@ -96,7 +99,7 @@ def check(
 
     if base:
         for tc_id, result in sorted(base.items()):
-            if result.ok and tc_id in declared and not head.get(tc_id, TcResult()).ok:
+            if result.ok and tc_id not in (retired or set()) and not head.get(tc_id, TcResult()).ok:
                 message = f"{tc_id}: passed on base but is {head.get(tc_id, TcResult()).status} now"
                 if not any(p.startswith(f"{tc_id}:") for p in problems):
                     problems.append(message)

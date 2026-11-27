@@ -8,5 +8,11 @@ length_days = 7         # used by the planner to size the sprint
 # reader; the conductor orders by each spec's priority, depends_on and touches.
 stories = []
 
-# Developer (GitHub login) whose subscriptions run a story that has no assignee.
+# Whose subscriptions and machine a story runs on. `assignee` is the default for
+# every story; list the exceptions under [owners]. This file is approved by a
+# human, which is why the conductor reads it here and not from issue assignees.
 assignee = "default"
+
+# [owners]
+# "012" = "alice"
+# "013" = "bob"

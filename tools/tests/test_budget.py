@@ -49,9 +49,15 @@ class RunnerChoiceTests(unittest.TestCase):
     def test_overflow_at_the_threshold_and_back_on_a_new_month(self):
         hosted, _ = budget.choose_runner({"month": "2026-11", "usd": 15.0}, CFG)
         self.assertEqual(json.loads(hosted), "ubuntu-latest")
-        moved, reason = budget.choose_runner({"month": "2026-11", "usd": 15.3}, CFG)
-        self.assertEqual(json.loads(moved), ["self-hosted", "agent-sandbox"])
+        configured = budget.settings({"actions": {"overflow_runner": ["self-hosted", "ci-ephemeral"]}})
+        moved, reason = budget.choose_runner({"month": "2026-11", "usd": 15.3}, configured)
+        self.assertEqual(json.loads(moved), ["self-hosted", "ci-ephemeral"])
         self.assertIn("85%", reason)
+
+    def test_overflow_is_off_unless_a_runner_is_configured(self):
+        stays, reason = budget.choose_runner({"month": "2026-11", "usd": 17.9}, CFG)
+        self.assertEqual(json.loads(stays), "ubuntu-latest")
+        self.assertIn("no overflow runner is configured", reason)
         back, _ = budget.choose_runner(budget.accumulate({"month": "2026-10", "through": "x", "usd": 18}, [], NOV, CFG), CFG)
         self.assertEqual(json.loads(back), "ubuntu-latest")
 
@@ -69,6 +75,13 @@ class LeaseTests(unittest.TestCase):
         self.assertEqual(lease.decide("local", str(now - 60), now, 20), "skip")
         self.assertEqual(lease.decide("local", str(now - 21 * 60), now, 20), "takeover")
         self.assertEqual(lease.decide("local", "", now, 20), "takeover")
+        self.assertEqual(lease.decide("local", f"{now - 60} mac:123", now, 20), "skip")
+
+    def test_a_local_conductor_stops_when_the_lease_names_someone_else(self):
+        self.assertTrue(lease.still_mine("local", "100 mac:1", "mac:1"))
+        self.assertFalse(lease.still_mine("local", "100 mac:2", "mac:1"))   # a second local process took it
+        self.assertFalse(lease.still_mine("actions", "100 mac:1", "mac:1"))  # Actions took over
+        self.assertFalse(lease.still_mine("local", "", "mac:1"))
 
     def test_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,8 +5,10 @@ things. Three dimensions:
 
   token     what the stage's GitHub token may do. Enforced by GitHub: an App
             installation token can be minted with a subset of the App's permissions.
-              write  push branches; comment, label, review
-              read   read the repository; comment, label, review. Cannot push.
+              write  push branches; comment and label on issues. Cannot open,
+                     review or merge a pull request.
+              read   read the repository; comment, label, review a pull request.
+                     Cannot push.
   network   which hosts the sandbox may reach.
               base   source control and the model providers
               build  base plus the package registries
@@ -24,8 +26,12 @@ What this cannot express: GitHub permissions are per repository, not per path.
 
 from __future__ import annotations
 
+# A token that can push must not also be able to open, retarget or merge pull
+# requests: merging needs both "contents: write" and a pull request to act on, and
+# opening them is the conductor's job. A token that can review cannot push.
+# Nobody but the conductor gets both.
 TOKEN_PERMISSIONS = {
-    "write": {"contents": "write", "pull_requests": "write", "issues": "write"},
+    "write": {"contents": "write", "pull_requests": "read", "issues": "write"},
     "read": {"contents": "read", "pull_requests": "write", "issues": "write"},
 }
 

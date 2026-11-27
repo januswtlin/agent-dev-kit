@@ -6,6 +6,7 @@ name: risk-gate
 
 on:
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
@@ -17,6 +18,8 @@ permissions:
 
 jobs:
   risk-gate:
+    # pull_request_review cannot be filtered by base branch in `on:`.
+    if: github.event.pull_request.base.ref == github.event.repository.default_branch
     runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
@@ -34,12 +37,15 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           git worktree add --detach ../base "origin/$BASE_REF"
-          AGENTCTL_TRUSTED_ROOT="$GITHUB_WORKSPACE/../base" PYTHONPATH=../base/tools \
-            python3 -m agentctl risk --base "origin/$BASE_REF" --branch "$HEAD_REF" | tee risk.json
-          echo "tier=$(python3 -c 'import json;print(json.load(open("risk.json"))["tier"])')" >> "$GITHUB_OUTPUT"
+          # This job can write statuses and labels, and its working directory is the pull
+          # request's tree. Every Python below runs with -I so that tree cannot supply a
+          # module (agentctl.py, json.py, tomllib.py) in place of the real one.
+          AGENTCTL_TRUSTED_ROOT="$GITHUB_WORKSPACE/../base" \
+            python3 -I ../base/tools/run.py risk --base "origin/$BASE_REF" --branch "$HEAD_REF" | tee "$RUNNER_TEMP/risk.json"
+          echo "tier=$(python3 -I -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/risk.json"))["tier"])')" >> "$GITHUB_OUTPUT"
           {
-            echo "### Risk tier: $(python3 -c 'import json;print(json.load(open("risk.json"))["tier"])')"
-            python3 -c 'import json;[print("- "+r) for r in json.load(open("risk.json"))["reasons"]]'
+            echo "### Risk tier: $(python3 -I -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/risk.json"))["tier"])')"
+            python3 -I -c 'import json,os;[print("- "+r) for r in json.load(open(os.environ["RUNNER_TEMP"]+"/risk.json"))["reasons"]]'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Label the pull request
@@ -72,7 +78,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          humans="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("../base/policy/roles.toml","rb"))["humans"]))')"
+          humans="$(python3 -I -c 'import tomllib;print(" ".join(tomllib.load(open("../base/policy/roles.toml","rb"))["humans"]))')"
           approvers="$(gh pr view "$PR" --json reviews \
             --jq "[.reviews[] | select(.state==\"APPROVED\" and .commit.oid==\"$HEAD_SHA\") | .author.login] | unique | .[]")"
           for h in $humans; do

@@ -80,6 +80,15 @@ def load_all(specs_dir: str | Path) -> dict[str, Spec]:
     return specs
 
 
+def load_retired(specs_dir: str | Path) -> set[str]:
+    """Test case ids a human agreed to drop: docs/specs/retired.toml, `retired = ["TC-012-03"]`."""
+    path = Path(specs_dir) / "retired.toml"
+    if not path.exists():
+        return set()
+    with open(path, "rb") as fh:
+        return {str(x) for x in tomllib.load(fh).get("retired", [])}
+
+
 def find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
     """Return one dependency cycle as a list of ids, or None."""
     state: dict[str, int] = {}

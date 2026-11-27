@@ -5,6 +5,7 @@ from agentctl.reconcile import PR, Dispatch, State, Story, plan
 
 NOW = 1_000_000.0
 GREEN = {"ci": "success", "security": "success", "spec-verify": "success", "risk-gate": "success"}
+DONE = {"design", "tests", "impl"}
 ROLES = {
     "developers": {
         "alice": {"stages": {"design": ["claude"], "tests": ["claude"], "impl": ["claude", "codex"],
@@ -102,13 +103,24 @@ class Progressing(unittest.TestCase):
         s.fix_rounds = 3
         self.assertEqual(kinds(run(state(s))), [("escalate", "001", "")])
 
-    def test_fix_in_progress_then_fresh_review(self):
-        done = {"design", "tests", "impl", "review"}
-        checks = dict(GREEN, **{"agent-review": "failure"})
-        s = story("001", stage_done=done, pr=PR(1, checks=checks), last_dispatch=Dispatch("fix", NOW - 60), fix_rounds=1)
+    def test_a_fix_is_in_flight_until_the_branch_moves(self):
+        # Mechanical failure before any review: the fix must not be launched again on every pass.
+        failing = dict(GREEN, ci="failure")
+        s = story("001", stage_done=DONE, pr=PR(1, checks=failing, head_sha="aaa"),
+                  last_dispatch=Dispatch("fix", NOW - 60, "claude", 1, "aaa"), fix_rounds=1)
         self.assertEqual(run(state(s)), [])
-        s.stage_done = {"design", "tests", "impl"}  # the fixing agent cleared done:review
+        s.pr.head_sha = "bbb"  # the fix was pushed; the checks on the new commit fail again
+        self.assertEqual(kinds(run(state(s))), [("dispatch", "001", "fix")])
+        s.pr.checks = GREEN  # or they pass, and the new commit has no review verdict yet
         self.assertEqual(kinds(run(state(s))), [("dispatch", "001", "review")])
+
+    def test_every_new_commit_needs_its_own_review(self):
+        s = story("001", stage_done=DONE | {"review"}, pr=PR(1, checks=GREEN, head_sha="bbb"),
+                  last_dispatch=Dispatch("review", NOW - 5000, "codex", 1, "aaa"))
+        # A stale done:review label and an old review dispatch do not stand in for a verdict on bbb.
+        self.assertEqual(kinds(run(state(s))), [("dispatch", "001", "review")])
+        s.last_dispatch = Dispatch("review", NOW - 60, "codex", 1, "bbb")
+        self.assertEqual(run(state(s)), [])  # that review is running
 
     def test_updates_branch_then_merges(self):
         done = {"design", "tests", "impl", "review"}
@@ -136,6 +148,13 @@ class Progressing(unittest.TestCase):
         self.assertEqual(kinds(run(state(done))), [("mark-ready", "001", "")])
         done.pr.draft = False  # checks have not reported yet
         self.assertEqual(run(state(done)), [])
+
+    def test_a_red_risk_gate_is_a_wait_for_a_person_not_a_ready_notice(self):
+        checks = dict(GREEN, **{"agent-review": "success", "risk-gate": "failure"})
+        t2 = story("001", stage_done=DONE, pr=PR(1, checks=checks, tier="T2"), last_dispatch=Dispatch("review", NOW - 60))
+        actions = run(state(t2, story("002")), wip_limit=1)
+        # No "ready to merge" for 001, and it does not hold the only WIP slot either.
+        self.assertEqual(kinds(actions), [("dispatch", "002", "design")])
 
     def test_merge_conflict_gets_a_resolution_task(self):
         s = story("001", stage_done={"design", "tests", "impl"}, pr=PR(1, checks=GREEN, conflicted=True),
@@ -202,6 +221,33 @@ class Exceptions(unittest.TestCase):
         self.assertIn("cycle", cyc[0].reason)
         self.assertEqual(run(state(story("001", depends_on=["404"])))[0].kind, "escalate")
         self.assertEqual(run(state(story("001", depends_on=["404"]), notified={"sprint-escalated"})), [])
+
+
+class PullRequestsAndDependencies(unittest.TestCase):
+    def test_pushed_branches_get_a_pull_request_from_the_conductor(self):
+        st = state(story("001", last_dispatch=Dispatch("design", NOW - 60)),
+                   unopened_branches=["chore/fix-main", "spec/014-refunds", "story/001-add"], prs_opened_today=10)
+        actions = run(st, max_prs_per_day=10)
+        # Spec and chore branches always get one; a story branch waits for tomorrow's budget.
+        self.assertEqual([a.reason for a in actions if a.kind == "open-pr"], ["chore/fix-main", "spec/014-refunds"])
+
+    def test_story_waits_while_its_pull_request_is_being_opened(self):
+        s = story("001", stage_done=DONE, last_dispatch=Dispatch("impl", NOW - 60))
+        self.assertEqual(kinds(run(state(s, unopened_branches=["story/001-add"]))), [("open-pr", "", "")])
+        self.assertEqual(run(state(s))[0].kind, "escalate")  # no branch either: something is wrong
+
+    def test_a_dependency_merged_in_an_earlier_sprint_is_satisfied(self):
+        st = state(story("012", depends_on=["007"]), merged_elsewhere={"007"})
+        self.assertEqual(kinds(run(st)), [("dispatch", "012", "design")])
+        self.assertEqual(run(state(story("012", depends_on=["007"])))[0].kind, "escalate")
+
+    def test_triage_retry_waits_for_a_dependency_added_by_triage(self):
+        blocked = story("001", stage_done={"design"}, blocked_by=["002"], triage_count=1, triage_verdict="retry",
+                        last_dispatch=Dispatch("triage", NOW - 60))
+        st = state(blocked, story("002"))
+        self.assertEqual(kinds(run(st)), [("dispatch", "002", "design")])
+        st.stories["002"].pr = PR(2, merged=True)
+        self.assertEqual(kinds(run(st)), [("dispatch", "001", "tests")])
 
 
 class SprintLevel(unittest.TestCase):

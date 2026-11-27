@@ -37,19 +37,24 @@
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
           {
-            "context": "ci"
+            "context": "ci",
+            "integration_id": 15368
           },
           {
-            "context": "security"
+            "context": "security",
+            "integration_id": 15368
           },
           {
-            "context": "spec-verify"
+            "context": "spec-verify",
+            "integration_id": 15368
           },
           {
-            "context": "risk-gate"
+            "context": "risk-gate",
+            "integration_id": 15368
           },
           {
-            "context": "agent-review"
+            "context": "agent-review",
+            "integration_id": 15368
           }
         ]
       }
