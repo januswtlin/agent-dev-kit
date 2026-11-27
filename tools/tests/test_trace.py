@@ -141,6 +141,23 @@ class RedGreenTests(unittest.TestCase):
             self.assertEqual(trace.count_red(pattern, ["test_hello"]), 1)
             self.assertEqual(trace.count_red(pattern, ["test_unrelated"]), 0)
             self.assertEqual(trace.count_red(pattern, []), 0)
+            self.assertEqual(trace.count_red(pattern, ["test_hel"]), 0)  # a prefix is not the file
+
+    def test_a_similarly_named_file_does_not_count_as_the_storys(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "r.xml").write_text(
+                '<testsuites><testsuite>'
+                '<testcase classname="tests.test_hello_legacy.Old" name="test_a"><failure>x</failure></testcase>'
+                '<testcase classname="app/test/s163-booking.test.ts" name="books"><failure>x</failure></testcase>'
+                '<testcase classname="x" name="y" file="web\\s164-pay.spec.ts"><error>x</error></testcase>'
+                '</testsuite></testsuites>', encoding="utf-8")
+            pattern = [str(Path(tmp, "*.xml"))]
+            self.assertEqual(trace.count_red(pattern, ["test_hello"]), 0)
+            self.assertEqual(trace.count_red(pattern, ["test_hello_legacy"]), 1)
+            self.assertEqual(trace.count_red(pattern, ["s163-booking.test"]), 1)  # Path("s163-booking.test.ts").stem
+            self.assertEqual(trace.count_red(pattern, ["s164-pay.spec"]), 1)
 
     def test_a_test_case_that_passed_in_any_earlier_run_is_remembered(self):
         newest = results([("test_tc_012_01_x", "fail")])

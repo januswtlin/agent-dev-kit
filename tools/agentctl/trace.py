@@ -9,6 +9,7 @@ are all accepted.
 from __future__ import annotations
 
 import glob
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
@@ -70,9 +71,12 @@ def parse_junit(patterns: list[str]) -> dict[str, TcResult]:
 def count_red(patterns: list[str], names: list[str] | None = None) -> int:
     """How many test cases in these files failed or errored, with or without a TC id.
 
-    With `names`, only those whose class, name or file mentions one of them. A
-    new test file that cannot even be imported on base shows up as an error
-    named after that file; an unrelated failure elsewhere does not.
+    With `names` (file stems of the overlaid test files), only those whose class
+    or file IS one of them: a whole path segment, dotted component or file name
+    with its extensions taken off one at a time. A new test file that cannot even
+    be imported on base shows up as an error named after that file; an unrelated
+    failure elsewhere does not, and neither does a file whose name merely
+    contains one of them (test_hello_legacy is not test_hello).
     """
     red = 0
     for pattern in patterns:
@@ -84,10 +88,25 @@ def count_red(patterns: list[str], names: list[str] | None = None) -> int:
             for case in root.iter("testcase"):
                 if not {child.tag for child in case} & {"failure", "error"}:
                     continue
-                label = " ".join(filter(None, [case.get("classname"), case.get("name"), case.get("file")]))
-                if names is None or any(name and name in label for name in names):
+                if names is None or _identities(case) & {n for n in names if n}:
                     red += 1
     return red
+
+
+def _identities(case) -> set[str]:
+    """The names a test case's class and file can be recognised by.
+
+    The test's own name counts too, whole: a module unittest cannot import is
+    reported as a test named after the module (unittest.loader._FailedTest).
+    """
+    found: set[str] = {case.get("name") or ""}
+    for value in (case.get("classname"), case.get("file")):
+        for segment in re.split(r"[/\\]", value or ""):
+            found.update(part for part in segment.split(".") if part)
+            while segment:
+                found.add(segment)
+                segment = segment.rpartition(".")[0]
+    return found
 
 
 def passed_in_any(groups: list[dict[str, TcResult]]) -> dict[str, TcResult]:

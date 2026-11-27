@@ -298,6 +298,71 @@ class ArmedAutoMerge(unittest.TestCase):
         del unreviewed.pr.checks["agent-review"]
         self.assertEqual(kinds(run(state(unreviewed), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])
 
+    def test_an_eligible_one_stays_armed_and_is_not_counted_as_an_orphan(self):
+        self.assertEqual(run(state(self.armed(), armed_story_prs=[1]), auto_merge_tiers=["T0"]), [])
+
+    def test_it_is_withdrawn_when_the_pass_stops_early(self):
+        red = state(self.armed(), armed_story_prs=[1], main_red=True, main_fix_in_flight=True)
+        self.assertEqual([(a.kind, a.reason) for a in run(red, auto_merge_tiers=["T0"])], [("disable-auto-merge", "#1")])
+        red.main_fix_in_flight = False
+        self.assertEqual([a.kind for a in run(red, auto_merge_tiers=["T0"])], ["dispatch", "disable-auto-merge"])
+        broken = state(self.armed(), armed_story_prs=[1])
+        broken.stories["001"].depends_on = ["099"]
+        self.assertEqual([(a.kind, a.reason) for a in run(broken, auto_merge_tiers=["T0"])][-1], ("disable-auto-merge", "#1"))
+        broken.notified = {"sprint-escalated"}  # already escalated: still disarmed on every pass
+        self.assertEqual([(a.kind, a.reason) for a in run(broken, auto_merge_tiers=["T0"])], [("disable-auto-merge", "#1")])
+
+    def test_one_whose_story_is_not_in_the_sprint_is_withdrawn(self):
+        self.assertEqual([(a.kind, a.reason) for a in run(state(story("002"), armed_story_prs=[7]), auto_merge_tiers=["T0"])
+                          if a.kind == "disable-auto-merge"], [("disable-auto-merge", "#7")])
+
+
+class ExitsToAPerson(unittest.TestCase):
+    """A stuck story goes to a person instead of waiting unnoticed."""
+
+    def parked(self, hours):
+        return story("001", blocked_by=["002"], stage_done={"design"},
+                     last_dispatch=Dispatch("triage", NOW - hours * 3600))
+
+    def test_a_story_parked_too_long_is_escalated(self):
+        dep = story("002", last_dispatch=Dispatch("impl", NOW - 60))
+        self.assertEqual([a for a in run(state(self.parked(71), dep)) if a.story == "001"], [])
+        escalations = [a for a in run(state(self.parked(73), dep)) if a.kind == "escalate"]
+        self.assertEqual([a.story for a in escalations], ["001"])
+        self.assertIn("waiting for 002", escalations[0].reason)
+
+    def test_too_many_sessions_is_escalated_but_not_while_one_runs(self):
+        busy = story("001", dispatches=15, stage_done={"design"}, last_dispatch=Dispatch("tests", NOW - 60))
+        self.assertEqual(kinds(run(state(busy))), [])
+        idle = story("001", dispatches=15, stage_done={"design", "tests"}, last_dispatch=Dispatch("tests", NOW - 60))
+        self.assertEqual(kinds(run(state(idle))), [("escalate", "001", "")])
+        self.assertEqual(kinds(run(state(idle), max_dispatches_per_story=16)), [("dispatch", "001", "impl")])
+
+    def test_an_escalation_names_the_stories_waiting_for_it(self):
+        failing = story("001", stage_done=DONE, fix_rounds=3,
+                        pr=PR(1, checks={"ci": "failure", "security": "success", "spec-verify": "success"}))
+        waiter = story("002", depends_on=["001"])
+        reason = next(a.reason for a in run(state(failing, waiter)) if a.kind == "escalate")
+        self.assertIn("Waiting for it: 002.", reason)
+
+    def test_a_story_waiting_on_a_person_is_mentioned_again_once(self):
+        waiting = story("001", labels={"needs-human"}, last_dispatch=Dispatch("triage", NOW - 49 * 3600))
+        actions = run(state(waiting))
+        reminders = [a for a in actions if a.kind == "notify" and a.key.startswith("waiting/")]
+        self.assertEqual(len(reminders), 1)
+        # The reminder is not movement: the stall notice still goes out.
+        self.assertIn("sprint-stalled-notice", ["sprint-stalled-notice" for a in actions if "blocked on a human" in a.reason])
+        st = state(waiting, notified={reminders[0].key})
+        self.assertEqual([a for a in run(st) if a.key.startswith("waiting/")], [])
+        fresh = story("001", labels={"needs-human"}, last_dispatch=Dispatch("triage", NOW - 47 * 3600))
+        self.assertEqual([a for a in run(state(fresh)) if a.key.startswith("waiting/")], [])
+
+    def test_a_story_coming_back_never_starts_beside_a_running_session_on_the_same_thing(self):
+        back = story("001", stage_done={"design"}, touches=["shared"], last_dispatch=Dispatch("triage", NOW - 9999),
+                     triage_count=1)
+        running = story("005", stage_done={"design"}, touches=["shared"], last_dispatch=Dispatch("tests", NOW - 60))
+        self.assertEqual([a for a in run(state(back, running), wip_limit=2) if a.kind == "dispatch"], [])
+
 
 class SprintLevel(unittest.TestCase):
     def test_sprint_complete_does_not_expand_scope(self):

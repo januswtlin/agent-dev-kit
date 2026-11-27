@@ -211,6 +211,12 @@ class DispatchTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
+    def test_a_malformed_quota_is_ignored_not_fatal(self):
+        self.assertEqual(github.parse_quota(""), {})
+        self.assertEqual(github.parse_quota("not json"), {})
+        self.assertEqual(github.parse_quota("[1, 2]"), {})
+        self.assertEqual(github.parse_quota('{"codex": 1700000000, "claude": "soon", "x": true}'), {"codex": 1700000000.0})
+
     def test_check_names_from_reusable_workflows_drop_the_caller(self):
         self.assertEqual(github.check_name({"name": "ci / spec-verify"}), "spec-verify")
         self.assertEqual(github.check_name({"name": "risk-gate"}), "risk-gate")
@@ -268,11 +274,18 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(github.select_pr(prs, "012", "main", "story/012-upload")["number"], 5)
 
     def test_the_tier_comes_from_commit_statuses_and_the_strictest_wins(self):
-        self.assertEqual(github.tier_of({"risk-tier/T0": "success", "ci": "success"}), "T0")
-        self.assertEqual(github.tier_of({"risk-tier/T0": "success", "risk-tier/T1": "success"}), "T1")
-        self.assertEqual(github.tier_of({"risk-tier/T0": "pending"}), "T2")
-        self.assertEqual(github.tier_of({"risk-tier/T9": "success"}), "T2")
-        self.assertEqual(github.tier_of({}), "T2")
+        def status(tier, state="SUCCESS", pr=7, base="main"):
+            return {"context": f"risk-tier/{tier}", "state": state, "description": f"pull request #{pr} into {base}"}
+        ci = {"name": "ci / ci", "conclusion": "SUCCESS"}
+        self.assertEqual(github.tier_of([status("T0"), ci], 7, "main"), "T0")
+        self.assertEqual(github.tier_of([status("T0"), status("T1")], 7, "main"), "T1")
+        self.assertEqual(github.tier_of([status("T0", state="PENDING")], 7, "main"), "T2")
+        self.assertEqual(github.tier_of([status("T9")], 7, "main"), "T2")
+        self.assertEqual(github.tier_of([], 7, "main"), "T2")
+        # Computed for another pull request, or against another base: not believed.
+        self.assertEqual(github.tier_of([status("T0", pr=8)], 7, "main"), "T2")
+        self.assertEqual(github.tier_of([status("T0", base="release")], 7, "main"), "T2")
+        self.assertEqual(github.tier_of([{"context": "risk-tier/T0", "state": "SUCCESS", "description": "anything"}], 7, "main"), "T2")
 
     def test_a_variable_that_cannot_be_read_is_not_an_unset_variable(self):
         saved = github.gh

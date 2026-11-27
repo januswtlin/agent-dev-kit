@@ -38,7 +38,7 @@
 #   ~/.config/agent-app/key.pem     (chmod 600)
 #
 # NOT YET RUN on a real machine. The sbx commands follow the Docker Sandboxes
-# documentation as read in November 2026; run docs/redteam-machine.md after setup.
+# documentation as read in November 2026; run the checklist in docs/layer-1-isolation.md after setup.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,7 +147,7 @@ To proceed without the check: AGENT_SKIP_NETWORK_PROBE=1"
     case "$result" in
       NONE|"HTTP 4"??|"HTTP 5"??) ;;
       "HTTP 2"??|"HTTP 3"??) die "sandbox $1 can reach $url, which no rule of this project allows for it.
-The sbx network preset is not deny-all, or a machine-wide rule allows it. See docs/new-machine.md, section 4." ;;
+The sbx network preset is not deny-all, or a machine-wide rule allows it. See docs/layer-1-isolation.md in the kit." ;;
       *) cannot_check "$1" "${result:-sbx exec failed}" ;;
     esac
   done
@@ -186,8 +186,13 @@ allow_hosts() {  # allow_hosts FILE [sbx policy options...]
   done < "$file"
 }
 
-create() {  # create NAME HARNESS STAGE
-  [ -x "$helper-write" ] || die "Run sandbox/sbx.sh setup first."
+create() {  # create NAME HARNESS STAGE [RECORD]
+  # Run as a process of its own (`sbx.sh _create`), never as `( create ... ) || ...`:
+  # bash ignores errexit inside a command whose status is tested, so a failed
+  # `sbx create` or `sbx secret set` would not stop it. RECORD, when given, is
+  # written the moment `sbx create` has succeeded: only a sandbox this invocation
+  # created may be removed by it.
+  [ -x "$helper-write" ] || die "Run: agentctl sandbox setup"
   same_repository
   valid_name "$1"
   no_secrets_in_tree
@@ -200,6 +205,7 @@ create() {  # create NAME HARNESS STAGE
     echo "sandbox $1 already exists. Remove it first: sbx rm --force $1" >&2; exit 3
   fi
   (cd "$project" && sbx create --clone --name "$1" "$2" .)
+  if [ -n "${4:-}" ]; then : > "$4"; fi
   # The real token never enters the VM: the proxy asks the helper when it needs one.
   # A "read" token can comment and label but cannot push.
   sbx secret set github --sandbox "$1" --command "$helper-$scope" --refresh 50m
@@ -245,6 +251,11 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     if [ "${AGENT_OLLAMA:-0}" = "1" ]; then sbx policy allow network localhost:11434; fi
     echo "Done. Log in to your harnesses as the sbx documentation describes."
     ;;
+  _create)
+    # Internal: one sandbox for `job`, in a process of its own (see create).
+    need_sbx
+    create "${2:?}" "${3:?}" "${4:?}" "${5:-}"
+    ;;
   job)
     need_sbx
     harness="${2:?usage: sbx.sh job HARNESS STORY STAGE PROMPT}"; story="${3:?story id}"; stage="${4:?stage}"; prompt="${5:?prompt}"
@@ -256,16 +267,19 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     valid_name "$name"
     mkdir -p "$log_dir"
     log="$log_dir/$story-$stage-$harness-$stamp.log"
-    # In a subshell, so that a refusal inside it comes back here and is shown.
-    # A sandbox that failed a check is removed: nobody is there to inspect it. But
-    # only if this invocation created it (status 3: the name was already taken).
+    # A separate process, so that errexit holds inside it and a refusal comes back
+    # here and is shown. A sandbox that failed a check is removed: nobody is there
+    # to inspect it. But only if this invocation created it, which the record says.
+    record="$log_dir/$story-$stage-$harness-$stamp.created"
     rc=0
-    ( create "$name" "$harness" "$stage" ) > "$log" 2>&1 || rc=$?
+    AGENT_PROJECT_DIR="$project" bash "${BASH_SOURCE[0]}" _create "$name" "$harness" "$stage" "$record" > "$log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then
       cat "$log" >&2
-      [ "$rc" -eq 3 ] || sbx rm --force "$name" >> "$log" 2>&1 || true
+      if [ -e "$record" ]; then sbx rm --force "$name" >> "$log" 2>&1 || true; fi
+      rm -f "$record"
       exit 1
     fi
+    rm -f "$record"
     # From here on the sandbox is this invocation's: remove it however this ends,
     # an interrupt included.
     trap 'sbx rm --force "$name" >> "$log" 2>&1 || echo "WARNING: could not remove sandbox $name" >> "$log"' EXIT

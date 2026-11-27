@@ -94,15 +94,19 @@ jobs:
             if [ "$t" = "$TIER" ]; then gh pr edit "$PR" --add-label "tier:$t"; else gh pr edit "$PR" --remove-label "tier:$t" || true; fi
           done
 
+      # The description names the pull request and its base: the conductor only
+      # believes a tier computed for the pull request it is deciding about.
       - name: Record the tier on the commit, for the conductor
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TIER: ${{ steps.tier.outputs.tier }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           case "$TIER" in T0|T1|T2) ;; *) echo "::error::unexpected tier: $TIER"; exit 1 ;; esac
           gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=success -f context="risk-tier/$TIER" \
-            -f description="risk tier of this commit, computed by risk-gate"
+            -f description="pull request #$PR into $BASE"
 
       # agent-review is a required status. The conductor only asks for an agent
       # review on story branches, so everything else is settled here: documentation

@@ -152,6 +152,27 @@ jobs:
             [ "$state" = "present" ] || continue
             gh run download "$id" --repo "$GITHUB_REPOSITORY" -n junit -D "$RUNNER_TEMP/main-artifact/$id" \
               || { echo "::error::run $id on $BASE_REF has results but they could not be downloaded"; exit 1; }
+            # Only a run whose results can be read counts towards the five: malformed
+            # reports must not push older usable ones out.
+            if ! python3 -I - "$RUNNER_TEMP/main-artifact/$id/junit" <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          base = sys.argv[1]
+          names = sorted(os.listdir(base)) if os.path.isdir(base) else []
+          for name in names:
+              path = os.path.join(base, name)
+              if name.endswith(".xml") and os.path.isfile(path) and not os.path.islink(path):
+                  try:
+                      if any(True for _ in ET.parse(path).getroot().iter("testcase")):
+                          sys.exit(0)
+                  except ET.ParseError:
+                      pass
+          sys.exit(1)
+          PY
+            then
+              echo "::warning::run $id on $BASE_REF has no readable test results; not counted"
+              rm -rf "$RUNNER_TEMP/main-artifact/$id"
+              continue
+            fi
             found=$((found + 1))
           done
           if [ "$found" -eq 0 ]; then

@@ -62,6 +62,7 @@ class Story:
     fix_rounds: int = 0
     triage_count: int = 0
     triage_verdict: str | None = None  # "retry" once a triage session asked for another attempt
+    dispatches: int = 0  # sessions dispatched for this story so far, every stage counted
 
     @property
     def done(self) -> bool:
@@ -94,6 +95,7 @@ class State:
     unopened_branches: list[str] = field(default_factory=list)  # agent branches with no pull request yet
     approved_prs: list[int] = field(default_factory=list)  # spec/sprint pull requests a human has approved
     armed_prs: list[int] = field(default_factory=list)  # open pull requests with auto-merge switched on
+    armed_story_prs: list[int] = field(default_factory=list)  # the story branches' ones among them
     pause_reason: str = "kill switch is on"
 
 
@@ -107,6 +109,7 @@ class Action:
     harness: str = ""
     attempt: int = 0
     reason: str = ""
+    key: str = ""  # for notify: the one-shot key that keeps it from being sent twice
 
     def __str__(self) -> str:
         parts = [self.kind]
@@ -133,6 +136,10 @@ DEFAULT_POLICY = {
     "max_open_spec_prs": 3,  # do not pile more unapproved specs than this on the director
     "auto_merge_tiers": [],  # shadow mode until T0/T1 are switched on
     "stage_timeout_minutes": {"default": 90, "triage": 30, "product-owner": 60},
+    # Exits to a person, so that a story cannot stay stuck unnoticed.
+    "max_parked_hours": 72,          # waiting for a dependency triage added
+    "max_dispatches_per_story": 15,  # sessions of every stage together
+    "remind_after_hours": 48,        # a story waiting on a person is mentioned again
 }
 
 
@@ -210,6 +217,10 @@ def pick_harness(story: Story, stage: str, roles: dict, state: State) -> str | N
     return None
 
 
+def _disarm(state: State) -> list[Action]:
+    return [Action("disable-auto-merge", reason=f"#{number}") for number in state.armed_story_prs]
+
+
 def plan(state: State, policy: dict | None = None, roles: dict | None = None) -> list[Action]:
     policy = {**DEFAULT_POLICY, **(policy or {})}
     roles = roles or {"developers": {"default": {"stages": {s: ["claude"] for s in [*STAGES, "triage"]}}}}
@@ -233,7 +244,8 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
     if cycle:
         broken = "dependency cycle: " + " -> ".join(cycle)
     if broken:
-        return [] if "sprint-escalated" in state.notified else [Action("escalate", reason=broken)]
+        # Nothing is judged while the plan is broken, so nothing may merge by itself either.
+        return ([] if "sprint-escalated" in state.notified else [Action("escalate", reason=broken)]) + _disarm(state)
 
     # Spec drafting is not development work: it continues while main is red or the
     # sprint is finished, so the director returns to specs that are ready to approve.
@@ -259,10 +271,11 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         opened.append(Action("enable-auto-merge", reason=f"#{number}"))
 
     if state.main_red:
+        # Story pull requests are not judged while main is red, so none may stay armed.
         if not state.main_fix_in_flight:
             return [Action("dispatch", stage="fix-main", harness=roles.get("planner", "claude"), attempt=1, reason="main is red"),
-                    *opened, *spec_work]
-        return [*opened, *spec_work]
+                    *opened, *spec_work, *_disarm(state)]
+        return [*opened, *spec_work, *_disarm(state)]
 
     def satisfied(dep: str) -> bool:
         return dep in state.merged_elsewhere or (dep in stories and stories[dep].done)
@@ -277,6 +290,15 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             return
         actions.append(Action("dispatch", story=story.id, stage=stage, harness=harness, attempt=attempt, reason=reason))
 
+    dependents = {sid: sorted(o.id for o in stories.values() if sid in o.deps and not o.done) for sid in stories}
+
+    def escalate(story: Story, why: str) -> None:
+        # Stories that wait for this one are not escalated too: settling this one
+        # frees them. They are named here so the person sees what hangs on it.
+        waiting_for_it = dependents.get(story.id) or []
+        tail = f" Waiting for it: {', '.join(waiting_for_it)}." if waiting_for_it else ""
+        actions.append(Action("escalate", story=story.id, reason=why + tail))
+
     def retry_or_give_up(story: Story, why: str) -> None:
         d = story.last_dispatch
         assert d is not None
@@ -285,17 +307,19 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         elif d.stage != "triage" and story.triage_count < policy["max_triage"]:
             dispatch(story, "triage", 1, why)
         else:
-            actions.append(Action("escalate", story=story.id, reason=why))
+            escalate(story, why)
 
     # Which started stories may be given new work in this pass. Normally all of
     # them: the WIP limit and the `touches` rule are applied when a story starts.
     # But stories that were parked (waiting for a dependency added later) or
     # blocked on a person gave their slot away, and several can come back at once.
     # Then the lowest ids go first, within the limit and without two that touch
-    # the same thing; the rest wait until one of those is merged.
+    # the same thing; the rest wait until one of those is merged. A story whose
+    # session is still running goes before all of them: it holds what it touches
+    # whatever its id, so nothing that comes back can start beside it.
     admitted: set[str] = set()
     slots, held = 0, set()
-    for story in sorted(stories.values(), key=lambda s: s.id):
+    for story in sorted(stories.values(), key=lambda s: (not _in_flight(s), s.id)):
         if (story.done or not story.started or "needs-human" in story.labels or "blocked" in story.labels
                 or not all(satisfied(dep) for dep in story.deps)):
             continue
@@ -306,6 +330,9 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             admitted.add(story.id)
             slots += 1
             held.update(story.touches)
+
+    # Armed story pull requests that a story of this sprint judged eligible in this pass.
+    vouched: set[int] = set()
 
     # 1. Advance stories already in progress.
     for story in sorted(stories.values(), key=lambda s: s.id):
@@ -326,14 +353,32 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
                         and armed.tier in policy["auto_merge_tiers"])
             if not eligible:
                 actions.append(Action("disable-auto-merge", story=story.id, reason="no longer meets what auto-merge was enabled for"))
+                vouched.add(armed.number)  # handled: withdrawn above
+                continue
+            vouched.add(armed.number)
+
+        d = story.last_dispatch
+        if "needs-human" in story.labels or "blocked" in story.labels or _human_blocked(story):
+            # Waiting on a person. Mentioned again once per wait after remind_after_hours.
+            if (d is not None and state.now - d.at > policy["remind_after_hours"] * 3600
+                    and f"waiting/{story.id}/{int(d.at)}" not in state.notified):
+                actions.append(Action("notify", story=story.id, key=f"waiting/{story.id}/{int(d.at)}",
+                                      reason=f"story {story.id} has waited on a person for over "
+                                             f"{policy['remind_after_hours']} hours"))
+            if "needs-human" in story.labels or "blocked" in story.labels:
                 continue
 
-        if "needs-human" in story.labels or "blocked" in story.labels:
+        if story.dispatches >= policy["max_dispatches_per_story"] and not _in_flight(story):
+            escalate(story, f"{story.dispatches} sessions without finishing (limit {policy['max_dispatches_per_story']})")
             continue
-        d = story.last_dispatch
 
         if not all(satisfied(dep) for dep in story.deps):
-            continue  # a dependency was added after it started (triage); it waits for that story
+            # A dependency was added after it started (triage): parked until that story
+            # merges. Parked too long means the split was wrong, which a person decides.
+            if d is not None and state.now - d.at > policy["max_parked_hours"] * 3600:
+                escalate(story, f"waiting for {', '.join(sorted(dep for dep in story.deps if not satisfied(dep)))} "
+                                f"for over {policy['max_parked_hours']} hours")
+            continue
 
         if story.id not in admitted:
             waiting += 1  # over the limit after several stories came back at once
@@ -366,7 +411,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             if any(b.startswith(f"story/{story.id}") for b in state.unopened_branches):
                 waiting += 1  # its pull request is being opened in this same run
             else:
-                actions.append(Action("escalate", story=story.id, reason="stages reported done but no branch or pull request exists"))
+                escalate(story, "stages reported done but no branch or pull request exists")
             continue
 
         if pr.draft:
@@ -380,7 +425,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             if story.fix_rounds < policy["max_fix_rounds"]:
                 dispatch(story, "fix", 1, "required checks are failing")
             else:
-                actions.append(Action("escalate", story=story.id, reason="checks still failing after the fix-round limit"))
+                escalate(story, "checks still failing after the fix-round limit")
             continue
         if mechanical == "pending":
             waiting += 1
@@ -395,7 +440,7 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             if story.fix_rounds < policy["max_fix_rounds"]:
                 dispatch(story, "fix", 1, "agent review requested changes")
             else:
-                actions.append(Action("escalate", story=story.id, reason="review still failing after the fix-round limit"))
+                escalate(story, "review still failing after the fix-round limit")
             continue
 
         if pr.behind:
@@ -446,6 +491,12 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             budget -= 1
             claimed.update(story.touches)
 
+    # An armed story pull request that no story of this sprint vouched for (its story
+    # left the sprint, or it is not the story's pull request) is not judged at all.
+    for number in state.armed_story_prs:
+        if number not in vouched:
+            actions.append(Action("disable-auto-merge", reason=f"#{number}"))
+
     # 3. Sprint-level signals.
     total = len(stories)
     finished = sum(1 for s in stories.values() if s.done)
@@ -456,7 +507,9 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
     if total and finished == total and "sprint-complete" not in state.notified:
         actions.append(Action("notify", reason="sprint complete; development stops until the next sprint is approved"))
 
-    stalled_before_spec_work = not (waiting > 0 or bool(actions))
+    # A reminder about a story that waits on a person is not movement.
+    moved = [a for a in actions if not (a.kind == "notify" and a.key.startswith("waiting/"))]
+    stalled_before_spec_work = not (waiting > 0 or bool(moved))
     actions[:0] = opened
     actions.extend(spec_work)
     # Anything done in this run (including an escalation, which already notifies a

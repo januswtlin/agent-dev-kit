@@ -197,7 +197,7 @@ def _conductor_identity(repo: Path) -> tuple[str, str, str]:
     settings = local.load_env_file(env_path)
     missing = [k for k in ("CONDUCTOR_APP_ID", "CONDUCTOR_APP_KEY", "DEVELOPER") if not settings.get(k)]
     if missing:
-        raise SystemExit(f"{env_path} must define {', '.join(missing)}. See docs/operations.md, section 1.")
+        raise SystemExit(f"{env_path} must define {', '.join(missing)}. See docs/layer-4-conductor.md in the kit.")
     os.environ.update(settings)
     remote = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, cwd=repo).stdout
     full_name = apptoken.repo_from_remote(remote)
@@ -474,7 +474,7 @@ def cmd_init(args) -> int:
 
 def cmd_rulesets(args) -> int:
     from .github import KIT_ROOT
-    os.execv("/bin/bash", ["bash", str(KIT_ROOT / "scripts" / "apply-rulesets.sh"), *([args.repo] if args.repo else [])])
+    os.execv("/bin/bash", ["bash", str(KIT_ROOT / "scripts" / "apply-rulesets.sh"), args.layer, *([args.repo] if args.repo else [])])
 
 
 def cmd_junit_unittest(args) -> int:
@@ -605,7 +605,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("rulesets", help="create or update the repository's rulesets (run by an admin)")
+    p = sub.add_parser("rulesets", help="create or update the rulesets of layer 2 or 3 (run by an admin)")
+    p.add_argument("layer", choices=["2", "3"])
     p.add_argument("repo", nargs="?", help="owner/name (default: the current repository)")
     p.set_defaults(func=cmd_rulesets)
 

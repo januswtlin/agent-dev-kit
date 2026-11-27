@@ -16,7 +16,7 @@ Trust rules for what is read back:
 
 NOTE: this adapter has not been exercised against a live repository yet.
 The pure scheduling logic it feeds (reconcile.plan) is unit-tested; the calls
-here are to be validated in the spike described in docs/new-project.md.
+here are to be validated in the spike described in docs/layer-4-conductor.md.
 """
 
 from __future__ import annotations
@@ -101,6 +101,30 @@ def _check_state(item: dict) -> str:
     if value in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"):
         return "failure"
     return "pending"
+
+
+def parse_quota(raw: str) -> dict[str, float]:
+    """CONDUCTOR_QUOTA: {"<harness>": <epoch seconds until its quota resets>}.
+
+    A person edits this variable by hand. Whatever it holds, a pass must go on (a
+    paused pass included), so anything that is not such a mapping is reported and
+    ignored, entry by entry.
+    """
+    try:
+        value = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        print("CONDUCTOR_QUOTA is not JSON; ignored")
+        return {}
+    if not isinstance(value, dict):
+        print("CONDUCTOR_QUOTA is not a JSON object; ignored")
+        return {}
+    quota: dict[str, float] = {}
+    for harness, until in value.items():
+        if isinstance(until, (int, float)) and not isinstance(until, bool):
+            quota[str(harness)] = float(until)
+        else:
+            print(f"CONDUCTOR_QUOTA: {harness!r} has no number of seconds; ignored")
+    return quota
 
 
 def check_name(item: dict) -> str:
@@ -203,16 +227,28 @@ def unopened_branches(branches: list[tuple[str, str]], prs: list[dict], default_
     return sorted(result)
 
 
-def tier_of(checks: dict[str, str]) -> str:
-    """The risk tier of a commit, from the statuses the risk-gate workflow put on it.
+TIER_FOR_RE = re.compile(r"^pull request #(\d+) into (\S+)$")
+
+
+def tier_of(rollup: list[dict], number: int, default_branch: str) -> str:
+    """The risk tier of a pull request's head commit, from the statuses risk-gate put on it.
 
     Not from the pull request's `tier:` label: an agent's token can edit labels,
     and the tier decides whether the conductor may merge. A commit status is on
-    one commit and needs a permission no agent token has. The most restrictive
-    tier found wins; none found is treated as T2.
+    one commit and needs a permission no agent token has. A commit can carry
+    statuses computed for other pull requests or other bases; only those computed
+    for THIS pull request into the default branch count (risk-gate writes
+    "pull request #N into BRANCH" as the description). The most restrictive tier
+    found wins; none found is treated as T2.
     """
-    found = [name.split("/", 1)[1] for name, state in checks.items()
-             if name.startswith("risk-tier/") and state == "success" and name.split("/", 1)[1] in ("T0", "T1", "T2")]
+    found = []
+    for item in rollup or []:
+        context = item.get("context") or ""
+        tier = context.removeprefix("risk-tier/")
+        target = TIER_FOR_RE.match(item.get("description") or "")
+        if (context.startswith("risk-tier/") and tier in ("T0", "T1", "T2") and _check_state(item) == "success"
+                and target and int(target.group(1)) == number and target.group(2) == default_branch):
+            found.append(tier)
     return max(found) if found else "T2"
 
 
@@ -247,11 +283,9 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
     try:
         paused = variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes")
         extra_bot = variable("CONDUCTOR_BOT")
-        quota = json.loads(variable("CONDUCTOR_QUOTA") or "{}")
+        quota = parse_quota(variable("CONDUCTOR_QUOTA"))
     except Unreadable as exc:
         paused, quota, pause_reason = True, {}, f"treated as paused: {exc}"
-    except json.JSONDecodeError:
-        quota = {}
     authors = trusted_authors(roles, extra_bot)
 
     prs = gh_json(
@@ -312,7 +346,7 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
                 conflicted=p.get("mergeable") == "CONFLICTING",
                 auto_merge=bool(p.get("autoMergeRequest")),
                 awaiting_human_review=p.get("reviewDecision") in ("REVIEW_REQUIRED", "CHANGES_REQUESTED"),
-                tier=tier_of(checks),
+                tier=tier_of(p.get("statusCheckRollup") or [], p["number"], default_branch),
                 draft=bool(p.get("isDraft")),
                 head_sha=p.get("headRefOid", ""),
             )
@@ -339,6 +373,7 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
             fix_rounds=sum(1 for m in markers if m.get("stage") == "fix" and int(m.get("attempt", 1)) == 1),
             triage_count=sum(1 for m in markers if m.get("stage") == "triage"),
             triage_verdict="retry" if "triage:retry" in labels else None,
+            dispatches=len(markers),
         )
 
     # Stories merged in an earlier sprint satisfy a dependency without being in this one.
@@ -362,10 +397,12 @@ def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State,
         paused=paused,
         pause_reason=pause_reason,
         armed_prs=sorted(p["number"] for p in prs if p.get("state") == "OPEN" and p.get("autoMergeRequest")),
+        armed_story_prs=sorted(p["number"] for p in prs if p.get("state") == "OPEN" and p.get("autoMergeRequest")
+                               and p.get("headRefName", "").startswith("story/")),
         main_red=main_red,
         main_fix_in_flight=bool(fix_main),
         prs_opened_today=prs_today,
-        quota_until={k: float(v) for k, v in quota.items()},
+        quota_until=quota,
         notified=notified,
         next_sprint_drafted=f"next-sprint/{sprint_id}" in notified,
         roadmap_pending=roadmap_pending,
@@ -636,7 +673,7 @@ def _execute_one(action: Action, context: dict, roles: dict) -> None:
         marker = "" if action.story else "<!-- conductor-notified sprint-escalated -->\n"
         gh("issue", "comment", issue, "--body", f"{marker}{mention} Needs a human decision: {action.reason}")
     elif action.kind == "notify":
-        key = f"ready-to-merge/{action.story}" if action.story else (
-            "sprint-complete" if "complete" in action.reason else "sprint-stalled")
+        key = action.key or (f"ready-to-merge/{action.story}" if action.story else (
+            "sprint-complete" if "complete" in action.reason else "sprint-stalled"))
         gh("issue", "comment", sprint_issue, "--body", f"<!-- conductor-notified {key} -->\n{mention} {action.reason}"
            + (f" (story {action.story})" if action.story else ""))

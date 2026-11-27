@@ -47,6 +47,15 @@ class Recording(unittest.TestResult):
         super().addError(test, err)
         self._add(test, "error", self._exc_info_to_string(err, test))
 
+    def addSubTest(self, test, subtest, err) -> None:
+        # A failing subTest fails its test, but unittest then reports neither a
+        # failure nor a success for the test itself: without this it would vanish.
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            kind = "failure" if issubclass(err[0], test.failureException) else "error"
+            self.cases.append((f"{test.id()} {subtest._subDescription()}", kind,
+                               self._exc_info_to_string(err, test), time.time() - self._started))
+
     def addSkip(self, test, reason) -> None:
         super().addSkip(test, reason)
         self._add(test, "skipped", str(reason))
@@ -70,7 +79,10 @@ def to_xml(cases: list[tuple[str, str, str, float]]) -> str:
              f'<testsuites><testsuite name="unittest" tests="{len(cases)}" failures="{count("failure")}" '
              f'errors="{count("error")}" skipped="{count("skipped")}">']
     for test_id, kind, text, seconds in cases:
-        classname, _, name = test_id.rpartition(".")
+        # A subtest's id is the test's id followed by its parameters, which may hold dots.
+        dotted, space, params = test_id.partition(" ")
+        classname, _, name = dotted.rpartition(".")
+        name += space + params
         head = f'<testcase classname={quoteattr(classname)} name={quoteattr(name)} time="{seconds:.3f}"'
         if kind == "passed":
             lines.append(head + "/>")

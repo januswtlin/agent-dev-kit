@@ -155,6 +155,11 @@ max_triage = 1        # triage sessions per story before a human is asked
 max_open_spec_prs = 3
 # Share of the sprint merged at which the planner drafts the next sprint.
 draft_next_sprint_at = 0.8
+# Exits to a person: a story that is stuck goes to `needs-human` (or, while it
+# already waits on one, is mentioned again) instead of waiting unnoticed.
+max_parked_hours = 72          # waiting for a dependency triage added
+max_dispatches_per_story = 15  # sessions of every stage together
+remind_after_hours = 48        # a story waiting on a person is mentioned again
 # Tiers the conductor may merge on its own. Empty means shadow mode: every gate is
 # computed and reported, but a human presses merge. T2 is never allowed here.
 auto_merge_tiers = []
