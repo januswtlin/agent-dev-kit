@@ -115,6 +115,16 @@ class RedGreenTests(unittest.TestCase):
         # With a report, a test missing from it (its file could not be imported) is red.
         self.assertEqual(redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=1), [])
 
+    def test_a_failed_setup_on_base_shows_nothing(self):
+        problems = redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=1, base_red_count=3, setup_exit=2)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("setup command exited 2", problems[0])
+
+    def test_missing_from_a_base_report_in_which_nothing_failed_is_not_red(self):
+        problems = redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=1, base_red_count=0)
+        self.assertTrue(problems and all("did not run on base" in p for p in problems))
+        self.assertEqual(redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=1, base_red_count=1), [])
+
     def test_skipped_on_base_is_not_red(self):
         base = results([("test_tc_000_02_x", "skip")])
         problems = redgreen.check(self.spec, base, results(ALL_PASS), base_report_count=1)

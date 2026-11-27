@@ -24,9 +24,17 @@ class SecretLookupTests(unittest.TestCase):
     def test_developer_specific_secret_wins_over_shared(self):
         os.environ["CONDUCTOR_SECRETS"] = json.dumps({"DISPATCH_TOKEN": "shared", "DISPATCH_TOKEN_ALICE_SMITH": "hers"})
         self.assertEqual(github.secret("DISPATCH_TOKEN", "alice-smith"), "hers")
-        self.assertEqual(github.secret("DISPATCH_TOKEN", "bob"), "shared")
         self.assertEqual(github.secret("DISPATCH_TOKEN"), "shared")
         self.assertEqual(github.secret("MISSING", "bob"), "")
+
+    def test_a_named_developer_never_gets_the_shared_secret_by_accident(self):
+        os.environ.pop("CONDUCTOR_LOCAL_DEVELOPER", None)
+        os.environ["CONDUCTOR_SECRETS"] = json.dumps({"DISPATCH_TOKEN": "shared"})
+        self.assertEqual(github.secret("DISPATCH_TOKEN", "bob"), "")
+        # On bob's own Mac the plain name is bob's.
+        os.environ["CONDUCTOR_LOCAL_DEVELOPER"] = "bob"
+        self.assertEqual(github.secret("DISPATCH_TOKEN", "bob"), "shared")
+        self.assertEqual(github.secret("DISPATCH_TOKEN", "alice"), "")
 
     def test_falls_back_to_the_environment_for_local_runs(self):
         os.environ.pop("CONDUCTOR_SECRETS", None)
@@ -183,6 +191,38 @@ class DispatchTests(unittest.TestCase):
         failures, calls = self.run_actions({"harness": {"codex": {"via": "comment"}}}, dict(stage="impl", harness="codex", attempt=1))
         self.assertEqual((failures, calls), (0, []))
 
+    def test_a_review_is_asked_for_one_commit(self):
+        roles = {"harness": {"claude": {"via": "http", "review_workflow": "agent-review.yml"}}}
+        failures, calls = self.run_actions(roles, dict(stage="review", harness="claude", attempt=1))
+        self.assertEqual(failures, 0)
+        run = next(c for c in calls if c[:2] == ("workflow", "run"))
+        self.assertIn("sha=abc", run)
+
+    def test_auto_merge_is_tied_to_the_commit_and_can_be_withdrawn(self):
+        from agentctl.reconcile import Action
+        github.gh = Recorder()
+        context = dict(self.CONTEXT, pr_shas={"7": "abc", "12": "def"})
+        actions = [Action("enable-auto-merge", story="001"), Action("enable-auto-merge", reason="#12"),
+                   Action("enable-auto-merge", reason="#99"), Action("disable-auto-merge", reason="#12")]
+        self.assertEqual(github.execute(actions, context, {}), 0)
+        self.assertEqual(github.gh.calls, [
+            ("pr", "merge", "7", "--auto", "--squash", "--match-head-commit", "abc"),
+            ("pr", "merge", "12", "--auto", "--squash", "--match-head-commit", "def"),
+            ("pr", "merge", "12", "--disable-auto")])
+
+    def test_a_run_limited_to_other_developers_and_stopped_when_the_lease_moves(self):
+        from agentctl.reconcile import Action
+        github.gh = Recorder()
+        os.environ["DISPATCH_TOKEN_ALICE"] = "t"
+        roles = {"harness": {"codex": {"via": "comment"}}}
+        actions = [Action("mark-ready", story="001"), Action("dispatch", story="001", stage="impl", harness="codex", attempt=1)]
+        only = lambda action, context: action.kind == "dispatch"  # noqa: E731
+        self.assertEqual(github.execute(actions, self.CONTEXT, roles, only=only, guard=lambda: False), 0)
+        self.assertEqual(github.gh.calls, [])
+        self.assertEqual(github.execute(actions, self.CONTEXT, roles, only=only, guard=lambda: True), 0)
+        self.assertNotIn(("pr", "ready", "7"), github.gh.calls)
+        self.assertTrue(any(c[:2] == ("issue", "comment") for c in github.gh.calls))
+
     def test_missing_credentials_fail_before_anything_is_written(self):
         roles = {"harness": {"claude": {"via": "http"}, "codex": {"via": "comment"}}}
         for harness in ("claude", "codex"):
@@ -227,12 +267,49 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(github.approved_decision_prs(prs, "main"), [1])
 
     def test_branches_without_a_pull_request_for_their_tip(self):
-        prs = [{"headRefName": "story/001-a", "headRefOid": "old", "state": "MERGED", "isCrossRepository": False},
-               {"headRefName": "spec/002-b", "headRefOid": "s2", "state": "OPEN", "isCrossRepository": False}]
+        def pr(head, oid, state, base="main"):
+            return {"headRefName": head, "headRefOid": oid, "state": state, "baseRefName": base, "isCrossRepository": False}
+        prs = [pr("story/001-a", "old", "MERGED"), pr("spec/002-b", "s2", "OPEN")]
         branches = [("main", "m"), ("story/001-a", "new"), ("spec/002-b", "s3"), ("chore/x", "c"),
                     ("feature/y", "f"), ("story/bad name;rm", "z")]
         # 001 has new commits after its merged PR; the spec's PR is still open; feature/* is not ours.
         self.assertEqual(github.unopened_branches(branches, prs, "main"), ["chore/x", "story/001-a"])
+        # A pull request into some other base does not stand in for the real one.
+        decoy = [pr("story/001-a", "new", "OPEN", base="elsewhere")]
+        self.assertEqual(github.unopened_branches([("story/001-a", "new")], decoy, "main"), ["story/001-a"])
+        # Only the branch the spec names is a story's branch.
+        self.assertEqual(github.unopened_branches([("story/001-a", "n"), ("story/001-decoy", "d")], [], "main",
+                                                  {"story/001-a"}), ["story/001-a"])
+
+    def test_a_second_branch_with_the_same_story_number_is_not_the_storys_pull_request(self):
+        def pr(number, head):
+            return {"number": number, "state": "OPEN", "headRefName": head, "baseRefName": "main", "isCrossRepository": False}
+        prs = [pr(5, "story/012-upload"), pr(9, "story/012-decoy")]
+        self.assertEqual(github.select_pr(prs, "012", "main", "story/012-upload")["number"], 5)
+
+    def test_the_tier_comes_from_commit_statuses_and_the_strictest_wins(self):
+        self.assertEqual(github.tier_of({"risk-tier/T0": "success", "ci": "success"}), "T0")
+        self.assertEqual(github.tier_of({"risk-tier/T0": "success", "risk-tier/T1": "success"}), "T1")
+        self.assertEqual(github.tier_of({"risk-tier/T0": "pending"}), "T2")
+        self.assertEqual(github.tier_of({"risk-tier/T9": "success"}), "T2")
+        self.assertEqual(github.tier_of({}), "T2")
+
+    def test_a_variable_that_cannot_be_read_is_not_an_unset_variable(self):
+        saved = github.gh
+
+        def missing(*args, **kw):
+            raise subprocess.CalledProcessError(1, "gh", stderr="gh: Not Found (HTTP 404)")
+
+        def broken(*args, **kw):
+            raise subprocess.CalledProcessError(1, "gh", stderr="error connecting to api.github.com")
+        try:
+            github.gh = missing
+            self.assertEqual(github.variable("CONDUCTOR_PAUSED"), "")
+            github.gh = broken
+            with self.assertRaises(github.Unreadable):
+                github.variable("CONDUCTOR_PAUSED")
+        finally:
+            github.gh = saved
 
 
 class StageProfileTests(unittest.TestCase):

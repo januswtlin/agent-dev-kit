@@ -86,3 +86,28 @@ class RiskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuotedPathTests(unittest.TestCase):
+    def test_a_path_git_would_quote_still_matches_the_policy(self):
+        import os
+        import subprocess
+        import tempfile
+
+        from agentctl import risk
+        from agentctl.globs import matches
+
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        with tempfile.TemporaryDirectory() as tmp:
+            def git(*args):
+                subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=tmp, check=True, capture_output=True, env=env)
+            git("init", "-q", "-b", "main")
+            git("commit", "-q", "--allow-empty", "-m", "base")
+            os.makedirs(os.path.join(tmp, "auth"))
+            with open(os.path.join(tmp, "auth", "caf\u00e9 login.py"), "w", encoding="utf-8") as fh:
+                fh.write("x = 1\n")
+            git("add", "-A")
+            git("commit", "-q", "-m", "change")
+            changes = risk.changes_from_git("HEAD~1", "HEAD", cwd=tmp)
+        self.assertEqual([c.path for c in changes], ["auth/caf\u00e9 login.py"])
+        self.assertTrue(matches(changes[0].path, ["**/auth/**", "auth/**"]))

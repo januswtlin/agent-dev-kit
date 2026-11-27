@@ -14,9 +14,14 @@ laptop is closed without handing over, or the local passes keep failing, the
 lease stops being renewed and the next scheduled Actions run takes over.
 
 Repository variables are not a lock: there is no compare-and-set. Two conductors
-can overlap for one pass around a hand-over. Dispatches are recorded before they
-are sent and each stage waits for its marker to expire, so the cost of an
-overlap is at worst one duplicated dispatch, never a lost one.
+can overlap around a hand-over. Each re-reads the lease before every dispatch it
+sends, which narrows the overlap to the dispatch already being sent, but does not
+close it: the same stage can be dispatched twice. Dispatches are recorded before
+they are sent, so an overlap duplicates work and never loses it.
+
+The holder is "<developer>@<host>:<pid>". While a local conductor holds the lease
+it leaves other developers' stories alone (it has only its own developer's
+credentials), so an Actions run that finds a fresh lease still dispatches those.
 """
 
 from __future__ import annotations
@@ -43,6 +48,11 @@ def decide(home: str, lease: str, now: float, ttl_minutes: float) -> str:
     if when is None:
         return "takeover"
     return "skip" if now - when < ttl_minutes * 60 else "takeover"
+
+
+def developer(holder: str) -> str:
+    """The developer a lease holder runs for; empty for a holder without one."""
+    return holder.split("@", 1)[0] if "@" in holder else ""
 
 
 def still_mine(home: str, lease: str, holder: str) -> bool:

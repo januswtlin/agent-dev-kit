@@ -66,9 +66,9 @@ def cmd_risk(args) -> int:
 def cmd_spec_lint(args) -> int:
     changed = None
     if args.base:
-        out = subprocess.run(["git", "diff", "--name-only", "--no-renames", f"{args.base}...HEAD"],
+        out = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", f"{args.base}...HEAD"],
                              check=True, capture_output=True, text=True).stdout
-        changed = {line for line in out.splitlines() if line}
+        changed = {line for line in out.split("\0") if line}
     return _finish("spec lint", specs.lint(_root() / "docs/specs", changed))
 
 
@@ -115,11 +115,12 @@ def cmd_redgreen_collect(args) -> int:
         return 0
     overlay = redgreen.test_files_to_overlay(root, args.base, all_specs[story], project.get("test_paths", []))
     print("overlaying on base:", ", ".join(overlay) or "(nothing)")
+    info: dict = {}
     redgreen.run_on_base(root, args.base, overlay, project["test_cmd"], project["junit_glob"], out_dir=out,
-                         setup_cmd=project.get("setup_cmd", ""))
+                         setup_cmd=project.get("setup_cmd", ""), info=info)
     reports = len(list(out.glob("*.xml")))
-    (out / "collected.json").write_text(json.dumps({"story": story, "base": args.base, "overlay": overlay, "reports": reports}),
-                                        encoding="utf-8")
+    (out / "collected.json").write_text(json.dumps({"story": story, "base": args.base, "overlay": overlay, "reports": reports,
+                                                    "setup_exit": info.get("setup_exit")}), encoding="utf-8")
     return 0
 
 
@@ -134,11 +135,18 @@ def cmd_redgreen_judge(args) -> int:
     marker = base_dir / "collected.json"
     # No JUnit file on base means every test was red there, which is a pass. So an
     # absent collection step must not be mistaken for that.
-    if not marker.exists() or json.loads(marker.read_text(encoding="utf-8")).get("story") != story:
+    try:
+        collected = json.loads(marker.read_text(encoding="utf-8")) if marker.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        collected = {}
+    if not isinstance(collected, dict) or collected.get("story") != story:
         return _finish("red-green", [f"no base results for story {story}: the collection step did not run"])
     reports = len(list(base_dir.glob("*.xml")))
-    return _finish("red-green", redgreen.check(all_specs[story], trace.parse_junit([str(base_dir / "*.xml")]),
-                                               trace.parse_junit(args.junit), base_report_count=reports))
+    setup_exit = collected.get("setup_exit")
+    return _finish("red-green", redgreen.check(
+        all_specs[story], trace.parse_junit([str(base_dir / "*.xml")]), trace.parse_junit(args.junit),
+        base_report_count=reports, base_red_count=trace.count_red([str(base_dir / "*.xml")]),
+        setup_exit=setup_exit if isinstance(setup_exit, int) else None))
 
 
 def cmd_evidence(args) -> int:
@@ -151,7 +159,7 @@ def cmd_evidence(args) -> int:
     return 0
 
 
-def _reconcile_once(root: Path, dry_run: bool) -> int:
+def _reconcile_once(root: Path, dry_run: bool, only=None, guard=None) -> int:
     from . import github, reconcile
 
     policy = _toml(root / "policy/conductor.toml")
@@ -161,25 +169,50 @@ def _reconcile_once(root: Path, dry_run: bool) -> int:
     actions = reconcile.plan(state, policy, roles)
     if not actions:
         print("nothing to do")
-    return github.execute(actions, context, roles, dry_run=dry_run)
+    return github.execute(actions, context, roles, dry_run=dry_run, only=only, guard=guard)
 
 
 def cmd_reconcile(args) -> int:
     from . import github
 
     root = _root()
+    only = guard = None
     if args.respect_lease:
         # On GitHub Actions: stand down while a local conductor holds a fresh lease.
         # The variables are read now, not taken from the moment the job was queued.
         ttl = _toml(root / "policy/conductor.toml").get("local_lease_minutes", 20)
-        verdict = lease.decide(github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE"), time.time(), ttl)
-        if verdict == "skip":
-            print("a local conductor holds the lease; nothing to do here")
-            return 0
-        if verdict == "takeover" and not args.dry_run:
-            print("the local conductor's lease expired; GitHub Actions takes over")
-            github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
-    return 1 if _reconcile_once(root, args.dry_run) else 0
+
+        def verdict() -> tuple[str, str]:
+            home, value = github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE")
+            return lease.decide(home, value, time.time(), ttl), lease.developer(lease.parse(value)[1])
+
+        try:
+            decision, local_developer = verdict()
+        except github.Unreadable as exc:
+            print(f"{exc}; doing nothing rather than guessing who holds the lease")
+            return 1
+        if decision == "skip":
+            if not local_developer:
+                print("a local conductor holds the lease; nothing to do here")
+                return 0
+            # That conductor leaves other developers' stories alone. Dispatch those
+            # from here, and nothing else: everything else is its to do.
+            print(f"a local conductor holds the lease for {local_developer}; dispatching other developers' stories only")
+
+            def only(action, context) -> bool:
+                owner = context.get("assignees", {}).get(action.story, "")
+                return action.kind == "dispatch" and bool(owner) and owner != local_developer
+
+            def guard() -> bool:
+                return verdict() == ("skip", local_developer)
+        else:
+            if decision == "takeover" and not args.dry_run:
+                print("the local conductor's lease expired; GitHub Actions takes over")
+                github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
+
+            def guard() -> bool:
+                return verdict()[0] != "skip"
+    return 1 if _reconcile_once(root, args.dry_run, only=only, guard=guard) else 0
 
 
 def _conductor_identity(repo: Path) -> tuple[str, str, str]:
@@ -241,10 +274,20 @@ def cmd_conductor(args) -> int:
         print("handed over to GitHub Actions")
         return 0
 
-    holder = f"{socket.gethostname()}:{os.getpid()}"
+    holder = f"{os.environ['CONDUCTOR_LOCAL_DEVELOPER']}@{socket.gethostname()}:{os.getpid()}"
     # Local sandboxes clone this repository, but are set up by the scripts on the
     # default branch, never by whatever branch happens to be checked out here.
     os.environ["AGENT_PROJECT_DIR"] = str(repo)
+
+    if args.dry_run:
+        # One pass that prints the plan. It does not take the lease or touch any
+        # variable, so GitHub Actions keeps running as it was.
+        trusted = lease.fresh_main_checkout(repo)
+        os.environ["AGENTCTL_TRUSTED_SCRIPTS"] = str(trusted)
+        return 1 if _reconcile_once(trusted, True) else 0
+
+    def mine() -> bool:
+        return lease.still_mine(github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE"), holder)
 
     def renew() -> None:
         github.gh("variable", "set", "CONDUCTOR_LEASE", "--body", f"{int(time.time())} {holder}")
@@ -257,14 +300,14 @@ def cmd_conductor(args) -> int:
     failures = 0
     try:
         while True:
-            _as_conductor(app_id, key, full_name)
-            if not lease.still_mine(github.variable("CONDUCTOR_HOME"), github.variable("CONDUCTOR_LEASE"), holder):
-                print("another conductor holds the lease; stopping")
-                return 0
             try:
+                _as_conductor(app_id, key, full_name)
+                if not mine():
+                    print("another conductor holds the lease; stopping")
+                    return 0
                 trusted = lease.fresh_main_checkout(repo)
                 os.environ["AGENTCTL_TRUSTED_SCRIPTS"] = str(trusted)
-                failed = _reconcile_once(trusted, args.dry_run)
+                failed = _reconcile_once(trusted, False, guard=mine)
             except (subprocess.CalledProcessError, OSError, SystemExit) as exc:
                 print(f"pass failed: {exc}")
                 failed = 1

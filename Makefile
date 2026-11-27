@@ -7,7 +7,9 @@
 #                non-zero when a test fails
 #   make build   produce deployable artefacts
 #
-# Replace the project-* targets when the stack is chosen. Examples:
+# As shipped, `make test` runs Python's unittest over tests/ and writes
+# reports/junit/unittest.xml, so a new project has a working red-green loop
+# before it has chosen a stack. Replace the project-* targets when it has:
 #   pytest:      pytest --junitxml=reports/junit/python.xml
 #   vitest:      vitest run --reporter=junit --outputFile=reports/junit/web.xml
 #   go:          gotestsum --junitfile reports/junit/go.xml ./...
@@ -36,6 +38,7 @@ project-lint:
 
 project-test:
 	@mkdir -p reports/junit
+	@python3 tools/junit_unittest.py tests reports/junit/unittest.xml
 
 project-build:
 	@true

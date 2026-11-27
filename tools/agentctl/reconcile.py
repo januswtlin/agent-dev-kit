@@ -93,11 +93,15 @@ class State:
     merged_elsewhere: set[str] = field(default_factory=set)  # stories merged in an earlier sprint
     unopened_branches: list[str] = field(default_factory=list)  # agent branches with no pull request yet
     approved_prs: list[int] = field(default_factory=list)  # spec/sprint pull requests a human has approved
+    armed_prs: list[int] = field(default_factory=list)  # open pull requests with auto-merge switched on
+    pause_reason: str = "kill switch is on"
 
 
 @dataclass(frozen=True)
 class Action:
-    kind: str  # dispatch | open-pr | mark-ready | update-branch | enable-auto-merge | escalate | notify | halt | draft-next-sprint
+    # dispatch | open-pr | mark-ready | update-branch | enable-auto-merge | disable-auto-merge |
+    # escalate | notify | halt | draft-next-sprint
+    kind: str
     story: str = ""
     stage: str = ""
     harness: str = ""
@@ -213,7 +217,10 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
     actions: list[Action] = []
 
     if state.paused:
-        return [Action("halt", reason="kill switch is on")]
+        # Auto-merge that is already switched on would otherwise carry on by itself:
+        # GitHub merges such a pull request the moment its checks turn green.
+        return [Action("halt", reason=state.pause_reason),
+                *(Action("disable-auto-merge", reason=f"#{number}") for number in state.armed_prs)]
 
     # A broken plan stops the whole sprint: nothing is dispatched until a human fixes it.
     broken = None
@@ -366,10 +373,14 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             actions.append(Action("notify", story=story.id, reason="all gates passed; shadow mode leaves the merge to a human"))
 
     # 2. Start new stories that are ready, within the WIP limit.
+    # A started story that waits for a dependency added later (by triage) is parked:
+    # it holds no WIP slot and no claim on what it touches. Otherwise the very story
+    # it waits for could never start when the two touch the same thing.
     open_stories = [s for s in stories.values() if s.started and not s.done]
-    wip = sum(1 for s in open_stories if not _human_blocked(s))
+    active = [s for s in open_stories if all(satisfied(d) for d in s.deps)]
+    wip = sum(1 for s in active if not _human_blocked(s))
     claimed: set[str] = set()
-    for s in open_stories:
+    for s in active:
         claimed.update(s.touches)
     dependents = {sid: sum(1 for o in stories.values() if sid in o.deps) for sid in stories}
 
@@ -395,11 +406,12 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
     # 3. Sprint-level signals.
     total = len(stories)
     finished = sum(1 for s in stories.values() if s.done)
-    if total and finished == total:
-        if "sprint-complete" not in state.notified:
-            actions.append(Action("notify", reason="sprint complete; development stops until the next sprint is approved"))
-    elif total and finished / total >= policy["draft_next_sprint_at"] and not state.next_sprint_drafted:
+    # Drafting is checked first and on its own: a short sprint can go from below the
+    # threshold to complete in one merge, and must still get its successor drafted.
+    if total and finished / total >= policy["draft_next_sprint_at"] and not state.next_sprint_drafted:
         actions.append(Action("draft-next-sprint", reason=f"{finished}/{total} stories merged"))
+    if total and finished == total and "sprint-complete" not in state.notified:
+        actions.append(Action("notify", reason="sprint complete; development stops until the next sprint is approved"))
 
     stalled_before_spec_work = not (waiting > 0 or bool(actions))
     actions[:0] = opened

@@ -68,6 +68,19 @@ def parse_junit(patterns: list[str]) -> dict[str, TcResult]:
     return results
 
 
+def count_red(patterns: list[str]) -> int:
+    """How many test cases in these files failed or errored, with or without a TC id."""
+    red = 0
+    for pattern in patterns:
+        for path in sorted(glob.glob(pattern, recursive=True)):
+            try:
+                root = ET.parse(path).getroot()
+            except ET.ParseError:
+                continue
+            red += sum(1 for case in root.iter("testcase") if {child.tag for child in case} & {"failure", "error"})
+    return red
+
+
 def check(
     specs: dict[str, Spec],
     head: dict[str, TcResult],

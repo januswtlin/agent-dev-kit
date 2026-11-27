@@ -254,13 +254,27 @@ class PullRequestsAndDependencies(unittest.TestCase):
         self.assertEqual(kinds(run(st)), [("dispatch", "001", "tests")])
 
 
+class Parked(unittest.TestCase):
+    def test_a_story_waiting_for_a_later_dependency_does_not_block_that_dependency(self):
+        # Triage made the running story 001 depend on 002, and both touch the database.
+        a = story("001", touches=["db"], blocked_by=["002"], stage_done={"design"},
+                  last_dispatch=Dispatch("tests", NOW - 60))
+        b = story("002", touches=["db"])
+        self.assertEqual(kinds(run(state(a, b), wip_limit=1)), [("dispatch", "002", "design")])
+
+
 class SprintLevel(unittest.TestCase):
     def test_sprint_complete_does_not_expand_scope(self):
         st = state(story("001", pr=PR(1, merged=True)), story("002", pr=PR(2, merged=True)))
+        st.next_sprint_drafted = True
         actions = run(st)
         self.assertEqual([a.kind for a in actions], ["notify"])
         self.assertIn("sprint complete", actions[0].reason)
-        self.assertEqual(run(state(*st.stories.values(), notified={"sprint-complete"})), [])
+        self.assertEqual(run(state(*st.stories.values(), notified={"sprint-complete"}, next_sprint_drafted=True)), [])
+
+    def test_a_sprint_that_completes_in_one_step_still_gets_its_successor_drafted(self):
+        st = state(story("001", pr=PR(1, merged=True)))
+        self.assertEqual([a.kind for a in run(st)], ["draft-next-sprint", "notify"])
 
     def test_next_sprint_is_drafted_once_near_the_end(self):
         merged = [story(f"00{i}", pr=PR(i, merged=True)) for i in range(1, 5)]
@@ -269,7 +283,8 @@ class SprintLevel(unittest.TestCase):
         self.assertEqual(run(state(*merged, last, next_sprint_drafted=True)), [])
 
     def test_specs_are_drafted_from_the_roadmap_without_flooding_the_director(self):
-        done = state(story("001", pr=PR(1, merged=True)), notified={"sprint-complete"}, roadmap_pending=2)
+        done = state(story("001", pr=PR(1, merged=True)), notified={"sprint-complete"}, roadmap_pending=2,
+                     next_sprint_drafted=True)
         self.assertEqual(kinds(run(done)), [("dispatch", "", "product-owner")])
         done.open_spec_prs = 3
         self.assertEqual(run(done), [])
@@ -282,6 +297,11 @@ class SprintLevel(unittest.TestCase):
         self.assertEqual(kinds(run(red)), [("dispatch", "", "product-owner")])
         red.paused = True
         self.assertEqual([a.kind for a in run(red)], ["halt"])
+
+    def test_pausing_also_withdraws_auto_merge_that_is_already_switched_on(self):
+        st = state(story("001"), paused=True, armed_prs=[4, 9])
+        self.assertEqual([(a.kind, a.reason) for a in run(st)],
+                         [("halt", "kill switch is on"), ("disable-auto-merge", "#4"), ("disable-auto-merge", "#9")])
 
     def test_spec_drafting_does_not_hide_a_stalled_sprint(self):
         blocked = story("001", labels={"needs-human"}, last_dispatch=Dispatch("impl", NOW - 60))

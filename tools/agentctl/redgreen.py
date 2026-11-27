@@ -23,7 +23,7 @@ def _git(args: list[str], cwd: str | Path) -> str:
 
 def test_files_to_overlay(repo: Path, base: str, spec: Spec, test_paths: list[str]) -> list[str]:
     """Files added or modified by the PR that are tests or mention this story's TC ids."""
-    changed = _git(["diff", "--name-only", "--no-renames", "--diff-filter=AM", f"{base}...HEAD"], repo).split("\n")
+    changed = _git(["diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM", f"{base}...HEAD"], repo).split("\0")
     selected = []
     for path in filter(None, changed):
         if matches(path, test_paths):
@@ -39,13 +39,13 @@ def test_files_to_overlay(repo: Path, base: str, spec: Spec, test_paths: list[st
 
 
 def run_on_base(repo: Path, base: str, overlay: list[str], test_cmd: str, junit_glob: str,
-                out_dir: Path | None = None, setup_cmd: str = "") -> dict[str, TcResult]:
+                out_dir: Path | None = None, setup_cmd: str = "", info: dict | None = None) -> dict[str, TcResult]:
     """Check out `base` in a temporary worktree, overlay the test files, run the tests.
 
     With `out_dir`, the JUnit files produced on base are copied there.
     `setup_cmd` runs first in the worktree: without the project's dependencies
     every test would fail there for the wrong reason, and "it failed on base"
-    would mean nothing.
+    would mean nothing. Its exit status is recorded in `info["setup_exit"]`.
     """
     tmp = Path(tempfile.mkdtemp(prefix="redgreen-"))
     worktree = tmp / "base"
@@ -56,7 +56,9 @@ def run_on_base(repo: Path, base: str, overlay: list[str], test_cmd: str, junit_
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(repo / rel, target)
         if setup_cmd:
-            subprocess.run(setup_cmd, shell=True, cwd=worktree, capture_output=True, text=True)
+            done = subprocess.run(setup_cmd, shell=True, cwd=worktree, capture_output=True, text=True)
+            if info is not None:
+                info["setup_exit"] = done.returncode
         # A non-zero exit is the expected outcome here, so it is not an error.
         subprocess.run(test_cmd, shell=True, cwd=worktree, capture_output=True, text=True)
         if out_dir is not None:
@@ -70,7 +72,8 @@ def run_on_base(repo: Path, base: str, overlay: list[str], test_cmd: str, junit_
 
 
 def check(spec: Spec, base_results: dict[str, TcResult], head_results: dict[str, TcResult],
-          base_report_count: int | None = None) -> list[str]:
+          base_report_count: int | None = None, base_red_count: int | None = None,
+          setup_exit: int | None = None) -> list[str]:
     """Each test case must be green on head and demonstrably red on base.
 
     "Red" has to be something the runner reported: a failure or an error. A test
@@ -78,8 +81,14 @@ def check(spec: Spec, base_results: dict[str, TcResult], head_results: dict[str,
     is accepted only when the base run did produce a report (the usual case: the
     new test file could not even be imported, which the runner records). If the
     base run produced no report at all, nothing has been shown and the check fails.
+    The same holds when the setup command failed there, and when a test case is
+    missing from a base report in which nothing at all is red: then the overlaid
+    test simply did not run.
     """
     problems = []
+    if setup_exit not in (None, 0):
+        return [f"the setup command exited {setup_exit} on base, so a failing test there shows nothing "
+                "(does `make setup` work on a clean checkout of the base branch?)"]
     if base_report_count == 0:
         return ["the test run on base produced no report at all, so red-green cannot be established "
                 "(does `make setup && make test` work on a clean checkout of the base branch?)"]
@@ -97,4 +106,6 @@ def check(spec: Spec, base_results: dict[str, TcResult], head_results: dict[str,
             )
         elif base.status == "skipped":
             problems.append(f"{tc.id}: was skipped on base, which does not show that it fails there")
+        elif base.status == "missing" and base_red_count == 0:
+            problems.append(f"{tc.id}: is not in the base report and nothing failed there, so its test did not run on base")
     return problems

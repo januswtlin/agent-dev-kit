@@ -17,11 +17,15 @@ name: agent-review
 #     job, which never sees the pull request's files, publishes the status
 #   - the verdict is written outside both checkouts, and only counts when the
 #     review step itself succeeded
+#   - the review is for one commit, named by the conductor. If the branch has
+#     moved by the time this job starts, nothing is reviewed and nothing is
+#     published; the conductor asks again for the new commit
 # What remains: the reviewer reads untrusted text and can be talked into a wrong
 # verdict. That is why no hard guarantee rests on this check (docs/guideline.md).
 #
-# VERIFY IN THE SPIKE: the inputs of anthropics/claude-code-action, and the login
-# and review format of the Codex review bot.
+# VERIFY IN THE SPIKE: the inputs of anthropics/claude-code-action; that `--tools`
+# limits the tools that exist for the session and `--allowedTools` only pre-approves
+# calls; and the login and review format of the Codex review bot.
 
 on:
   workflow_dispatch:
@@ -34,6 +38,10 @@ on:
         required: true
       developer:
         description: Whose subscription runs the review (login in upper case, as used in secret names)
+        required: false
+        default: ""
+      sha:
+        description: The commit to review. The job stops if the pull request's head is a different one
         required: false
         default: ""
   pull_request_review:
@@ -62,17 +70,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.pr }}
           STORY: ${{ inputs.story }}
+          WANTED: ${{ inputs.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           case "$PR" in ''|*[!0-9]*) echo "::error::not a pull request number"; exit 1 ;; esac
           case "$STORY" in [0-9][0-9][0-9]) ;; *) echo "::error::not a story id"; exit 1 ;; esac
+          case "$WANTED" in ''|*[!0-9a-f]*) [ -z "$WANTED" ] || { echo "::error::not a commit id"; exit 1; } ;; esac
           gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid,baseRefName,isCrossRepository,state > "$RUNNER_TEMP/pr.json"
-          python3 -I - "$RUNNER_TEMP/pr.json" "$DEFAULT_BRANCH" <<'PY' >> "$GITHUB_OUTPUT"
+          python3 -I - "$RUNNER_TEMP/pr.json" "$DEFAULT_BRANCH" "$WANTED" <<'PY' >> "$GITHUB_OUTPUT"
           import json, sys
           pr = json.load(open(sys.argv[1]))
           assert pr["state"] == "OPEN", "the pull request is not open"
           assert pr["baseRefName"] == sys.argv[2], "the pull request does not target the default branch"
           assert not pr["isCrossRepository"], "the pull request comes from another repository"
+          # No output on a mismatch: with no `sha` nothing is reviewed and nothing is published.
+          assert not sys.argv[3] or pr["headRefOid"] == sys.argv[3], "the branch moved since this review was asked for"
           print("sha=" + pr["headRefOid"])
           PY
       - name: Check out the default branch (the reviewer's own instructions and settings)
@@ -93,7 +105,9 @@ jobs:
         id: review
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', inputs.developer)] || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # A named developer's review runs on that developer's subscription or not at
+          # all; the plain name is only for a story that names nobody.
+          claude_code_oauth_token: ${{ inputs.developer != '' && secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', inputs.developer)] || inputs.developer == '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ github.token }}
           prompt: |
             Follow prompts/review.md in THIS directory exactly. Read AGENTS.md in this directory first.
@@ -104,6 +118,7 @@ jobs:
             Do not write anywhere else. Do not commit or push anything.
           claude_args: >-
             --max-turns 60
+            --tools "Read,Grep,Glob,Write,Bash"
             --allowedTools "Read,Grep,Glob,Write,Bash(git -C pr log:*),Bash(git -C pr diff:*),Bash(git -C pr show:*)"
       - name: Read the verdict
         id: verdict

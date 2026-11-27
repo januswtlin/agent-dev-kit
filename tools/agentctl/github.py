@@ -61,12 +61,22 @@ def gh_json(*args: str, default=None):
         return default
 
 
+class Unreadable(OSError):
+    """A repository variable could not be read. Not the same as "it is not set"."""
+
+
 def variable(name: str) -> str:
-    """A repository variable, read live. Falls back to the environment (tests, old gh)."""
+    """A repository variable, read live. Empty when it is not set.
+
+    A failed read raises. The kill switch and the lease are variables, and a
+    network error must never read as "not paused" or "nobody holds the lease".
+    """
     try:
-        return gh("variable", "get", name).strip()
-    except (subprocess.CalledProcessError, OSError):
-        return os.environ.get(name, "")
+        return gh("api", f"repos/{{owner}}/{{repo}}/actions/variables/{name}", "--jq", ".value").strip()
+    except subprocess.CalledProcessError as exc:
+        if "HTTP 404" in (exc.stderr or ""):
+            return ""
+        raise Unreadable(f"cannot read the repository variable {name}: {(exc.stderr or '').strip()[-200:]}") from exc
 
 
 def active_sprint(repo_root: Path) -> tuple[str, dict]:
@@ -110,7 +120,13 @@ def ensure_issue(label: str, title: str, body: str, read_only: bool) -> dict:
 
 
 def trusted_authors(roles: dict) -> set[str]:
-    """Logins whose marker comments are believed: the conductor and the humans."""
+    """Logins whose marker comments are believed: the conductor and the humans.
+
+    The bot is accepted with and without its "[bot]" suffix, because GitHub's
+    two APIs spell a bot's login differently. A person whose login equals the
+    App's slug would therefore be believed too; they would also have to be a
+    collaborator on this repository to comment at all.
+    """
     logins = {str(h) for h in roles.get("humans", [])}
     for bot in (os.environ.get("CONDUCTOR_BOT", ""), variable("CONDUCTOR_BOT")):
         if bot:
@@ -140,10 +156,15 @@ def read_markers(bodies: list[str]) -> list[dict]:
     return [m for m in markers if m.get("id") not in cancelled]
 
 
-def select_pr(prs: list[dict], story_id: str, default_branch: str) -> dict | None:
-    """The story's pull request: open first, else merged; same repository, default base."""
+def select_pr(prs: list[dict], story_id: str, default_branch: str, branch: str | None = None) -> dict | None:
+    """The story's pull request: open first, else merged; same repository, default base.
+
+    With `branch` (the name the spec gives the story's branch), only that exact
+    branch counts: story/012-anything-else is not story 012's pull request.
+    """
     mine = [p for p in prs
             if (m := STORY_BRANCH_RE.match(p.get("headRefName", ""))) and m.group(1) == story_id
+            and (branch is None or p.get("headRefName") == branch)
             and p.get("baseRefName") == default_branch and not p.get("isCrossRepository")]
     for state in ("OPEN", "MERGED"):
         candidates = [p for p in mine if p.get("state") == state]
@@ -152,17 +173,39 @@ def select_pr(prs: list[dict], story_id: str, default_branch: str) -> dict | Non
     return None
 
 
-def unopened_branches(branches: list[tuple[str, str]], prs: list[dict], default_branch: str) -> list[str]:
-    """Agent branches that have no pull request for their current tip yet."""
+def unopened_branches(branches: list[tuple[str, str]], prs: list[dict], default_branch: str,
+                      story_branches: set[str] | None = None) -> list[str]:
+    """Agent branches that have no pull request into the default branch for their tip yet.
+
+    A pull request into some other base does not count: it would otherwise keep
+    the real one from ever being opened. With `story_branches`, a story/ branch
+    is only picked up when it is one of those names (the ones the specs define).
+    """
     result = []
     for name, sha in branches:
         if not name.startswith(BRANCH_PREFIXES) or not SAFE_BRANCH_RE.match(name):
             continue
+        if story_branches is not None and name.startswith("story/") and name not in story_branches:
+            continue
         covered = any(p.get("headRefName") == name and not p.get("isCrossRepository")
+                      and p.get("baseRefName") == default_branch
                       and (p.get("state") == "OPEN" or p.get("headRefOid") == sha) for p in prs)
         if not covered:
             result.append(name)
     return sorted(result)
+
+
+def tier_of(checks: dict[str, str]) -> str:
+    """The risk tier of a commit, from the statuses the risk-gate workflow put on it.
+
+    Not from the pull request's `tier:` label: an agent's token can edit labels,
+    and the tier decides whether the conductor may merge. A commit status is on
+    one commit and needs a permission no agent token has. The most restrictive
+    tier found wins; none found is treated as T2.
+    """
+    found = [name.split("/", 1)[1] for name, state in checks.items()
+             if name.startswith("risk-tier/") and state == "success" and name.split("/", 1)[1] in ("T0", "T1", "T2")]
+    return max(found) if found else "T2"
 
 
 def approved_decision_prs(prs: list[dict], default_branch: str) -> list[int]:
@@ -236,19 +279,18 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
         impl = [m for m in markers if m.get("stage") == "impl"]
 
         pr = None
-        p = select_pr(prs, sid, default_branch)
+        p = select_pr(prs, sid, default_branch, f"story/{sid}-{spec.slug}" if spec else None)
         if p:
-            pr_labels = {label["name"] for label in p.get("labels", [])}
-            tier = next((name.split(":", 1)[1] for name in pr_labels if name.startswith("tier:")), "T1")
+            checks = {(c.get("name") or c.get("context") or ""): _check_state(c) for c in p.get("statusCheckRollup") or []}
             pr = PR(
                 number=p["number"],
                 merged=p.get("state") == "MERGED",
-                checks={(c.get("name") or c.get("context") or ""): _check_state(c) for c in p.get("statusCheckRollup") or []},
+                checks=checks,
                 behind=p.get("mergeStateStatus") == "BEHIND",
                 conflicted=p.get("mergeable") == "CONFLICTING",
                 auto_merge=bool(p.get("autoMergeRequest")),
                 awaiting_human_review=p.get("reviewDecision") in ("REVIEW_REQUIRED", "CHANGES_REQUESTED"),
-                tier=tier,
+                tier=tier_of(checks),
                 draft=bool(p.get("isDraft")),
                 head_sha=p.get("headRefOid", ""),
             )
@@ -288,14 +330,22 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
     main_red = any(c.get("name") == "ci" and c.get("conclusion") == "failure" for c in main_checks)
     fix_main = gh_json("issue", "list", "--label", "fix-main", "--state", "open", "--json", "number", default=[])
 
+    # Fail closed: when the kill switch cannot be read, behave as if it were on.
+    pause_reason = "kill switch is on"
     try:
+        paused = variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes")
         quota = json.loads(variable("CONDUCTOR_QUOTA") or "{}")
+    except Unreadable as exc:
+        paused, quota, pause_reason = True, {}, f"treated as paused: {exc}"
     except json.JSONDecodeError:
         quota = {}
+    story_branches = {f"story/{sid}-{spec.slug}" for sid, spec in specs.items()}
     state = State(
         stories=stories,
         now=time.time(),
-        paused=variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes"),
+        paused=paused,
+        pause_reason=pause_reason,
+        armed_prs=sorted(p["number"] for p in prs if p.get("state") == "OPEN" and p.get("autoMergeRequest")),
         main_red=main_red,
         main_fix_in_flight=bool(fix_main),
         prs_opened_today=prs_today,
@@ -306,7 +356,7 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
         open_spec_prs=open_spec_prs,
         last_po_dispatch=last_po,
         merged_elsewhere=merged_elsewhere,
-        unopened_branches=unopened_branches(branches, prs, default_branch),
+        unopened_branches=unopened_branches(branches, prs, default_branch, story_branches),
         approved_prs=approved_decision_prs(prs, default_branch),
     )
     context = {"repo": repo, "default_branch": default_branch, "sprint": sprint_id,
@@ -314,6 +364,7 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
                "issues": {sid: issue["number"] for sid, issue in issues.items()}, "specs": specs,
                "prs": {sid: s.pr.number for sid, s in stories.items() if s.pr and not s.pr.merged},
                "shas": {sid: s.pr.head_sha for sid, s in stories.items() if s.pr},
+               "pr_shas": {str(p["number"]): p.get("headRefOid", "") for p in prs if p.get("state") == "OPEN"},
                "assignees": {sid: s.assignee for sid, s in stories.items() if s.assignee != "default"}}
     return state, context
 
@@ -345,18 +396,25 @@ def developer_key(login: str) -> str:
 
 
 def secret(name: str, developer: str = "") -> str:
-    """A credential for one developer's subscription, falling back to a shared one.
+    """A credential for one developer's subscription.
 
     Each developer's stories run on that developer's own subscriptions, so the
-    trigger URLs and tokens are per developer: NAME_<LOGIN> wins over NAME.
-    On GitHub Actions they arrive together in CONDUCTOR_SECRETS (the secrets
-    context as JSON); in a terminal they come from the environment.
+    trigger URLs and tokens are per developer: NAME_<LOGIN>. The plain NAME is
+    used for a story that names no developer (sprint assignee "default"), and on
+    a developer's own Mac for that developer's stories. It is never a fallback
+    for another named developer: that would run their story on someone else's
+    subscription without anyone noticing.
+    On GitHub Actions the secrets arrive together in CONDUCTOR_SECRETS (the
+    secrets context as JSON); in a terminal they come from the environment.
     """
     try:
         pool = json.loads(os.environ.get("CONDUCTOR_SECRETS") or "{}")
     except json.JSONDecodeError:
         pool = {}
-    for key in ([f"{name}_{developer_key(developer)}"] if developer else []) + [name]:
+    keys = [f"{name}_{developer_key(developer)}"] if developer else [name]
+    if developer and developer == os.environ.get("CONDUCTOR_LOCAL_DEVELOPER"):
+        keys.append(name)
+    for key in keys:
         value = pool.get(key) or os.environ.get(key)
         if value:
             return value
@@ -410,8 +468,11 @@ def _send(action: Action, context: dict, roles: dict) -> None:
     if action.stage == "review" and harness.get("review_workflow"):
         # A review that runs as a workflow job is published by a job the implementing
         # agent has no way to influence.
+        # The commit is the one recorded in the dispatch marker. The job refuses to
+        # review any other, so a push made while it was queued gets its own review.
         gh("workflow", "run", harness["review_workflow"], "--ref", context["default_branch"],
-           "-f", f"pr={pr}", "-f", f"story={action.story}", "-f", f"developer={developer_key(developer)}")
+           "-f", f"pr={pr}", "-f", f"story={action.story}", "-f", f"developer={developer_key(developer)}",
+           "-f", f"sha={context.get('shas', {}).get(action.story, '')}")
     elif via == "sbx":
         # A clone-mode Docker Sandbox on a developer's Mac. Only a conductor running on
         # THAT developer's Mac can start one; from anywhere else the stage waits.
@@ -441,16 +502,26 @@ def _send(action: Action, context: dict, roles: dict) -> None:
         urllib.request.urlopen(request, timeout=30).read()
 
 
-def execute(actions: list[Action], context: dict, roles: dict, dry_run: bool = False) -> int:
+def execute(actions: list[Action], context: dict, roles: dict, dry_run: bool = False,
+            only=None, guard=None) -> int:
     """Carry out the actions. One failing action does not stop the others.
 
+    `only(action, context)`, when given, selects the actions this run may carry
+    out; the rest are left to the other conductor. `guard()` is asked before
+    every dispatch and stops the run when it answers no (the lease has moved).
     Returns the number of actions that failed.
     """
     failures = 0
     for action in actions:
+        if only is not None and not only(action, context):
+            print(f"left to the other conductor: {action}")
+            continue
         print(("DRY-RUN " if dry_run else "") + str(action))
         if dry_run or action.kind == "halt":
             continue
+        if guard is not None and action.kind in ("dispatch", "draft-next-sprint") and not guard():
+            print("  the lease has moved; stopping this pass")
+            break
         try:
             _execute_one(action, context, roles)
         except Deferred as exc:
@@ -537,8 +608,15 @@ def _execute_one(action: Action, context: dict, roles: dict) -> None:
             gh("api", "--method", "PUT", f"repos/{context['repo']}/pulls/{pr}/update-branch")
     elif action.kind == "enable-auto-merge":
         number = str(pr) if pr else action.reason.lstrip("#")
+        sha = context.get("pr_shas", {}).get(number, "")
+        if number.isdigit() and sha:
+            # Only the commit this decision was made about. If the branch moved in the
+            # meantime, GitHub refuses and the next pass decides again.
+            gh("pr", "merge", number, "--auto", "--squash", "--match-head-commit", sha)
+    elif action.kind == "disable-auto-merge":
+        number = action.reason.lstrip("#")
         if number.isdigit():
-            gh("pr", "merge", number, "--auto", "--squash")
+            gh("pr", "merge", number, "--disable-auto")
     elif action.kind == "escalate":
         # Mention, do not assign: assignees are not how the conductor knows whose story it is,
         # but changing them would still be confusing.

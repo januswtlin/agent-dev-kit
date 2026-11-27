@@ -74,11 +74,13 @@ def assess(changes: list[Change], policy: dict, has_story: bool) -> Assessment:
 
 def changes_from_git(base: str, head: str = "HEAD", cwd: str | None = None) -> list[Change]:
     out = subprocess.run(
-        ["git", "diff", "--numstat", "--no-renames", f"{base}...{head}"],
+        # -z: paths arrive as they are. Without it git quotes and escapes any path with
+        # an unusual character, and a quoted path matches no pattern in the policy.
+        ["git", "diff", "--numstat", "-z", "--no-renames", f"{base}...{head}"],
         check=True, capture_output=True, text=True, cwd=cwd,
     ).stdout
     changes = []
-    for line in out.splitlines():
+    for line in filter(None, out.split("\0")):
         added, deleted, path = line.split("\t", 2)
         changes.append(Change(path, 0 if added == "-" else int(added), 0 if deleted == "-" else int(deleted)))
     return changes

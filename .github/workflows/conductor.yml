@@ -34,8 +34,9 @@ on:
         type: boolean
         default: false
   workflow_run:
-    # `notify` fires when an agent pushes a branch; `risk-gate` re-runs on reviews.
-    workflows: [ci, risk-gate, notify]
+    # `notify` fires when an agent pushes a branch; `risk-gate` re-runs on reviews;
+    # `agent-review` ends when a review verdict has been published.
+    workflows: [ci, risk-gate, notify, agent-review]
     types: [completed]
   pull_request_target:
     types: [closed]

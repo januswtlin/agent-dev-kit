@@ -11,7 +11,7 @@
 max_changed_lines = 600
 max_changed_files = 40
 # Lock files and generated files do not count towards the size limits.
-ignore_for_size = ["**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/uv.lock", "**/poetry.lock", "**/Cargo.lock", "**/go.sum"]
+ignore_for_size = ["**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock", "**/bun.lockb", "**/uv.lock", "**/poetry.lock", "**/Cargo.lock", "**/go.sum", "**/*.lock", "**/*.lockfile"]
 
 [t0]
 # A change is T0 only when every changed file matches one of these.
@@ -77,4 +77,24 @@ dependency_manifests = [
   "**/Cargo.lock",
   "**/go.sum",
   "**/Gemfile.lock",
+  # Any other lock file, whatever the package manager: bun.lock, composer.lock,
+  # Pipfile.lock, pdm.lock, mix.lock, flake.lock, gradle.lockfile, ...
+  "**/*.lock",
+  "**/*.lockb",
+  "**/*.lockfile",
+  "**/npm-shrinkwrap.json",
+  "**/packages.lock.json",
+  "**/composer.json",
+  "**/Pipfile",
+  "**/setup.py",
+  "**/setup.cfg",
+  "**/mix.exs",
+  "**/deno.json",
+  "**/*.csproj",
+  "**/flake.nix",
+  # Where packages are fetched from.
+  "**/.npmrc",
+  "**/.yarnrc*",
+  "**/pip.conf",
+  "**/.pypirc",
 ]

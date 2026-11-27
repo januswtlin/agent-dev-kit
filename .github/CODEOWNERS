@@ -46,6 +46,23 @@ Cargo.toml          @DIRECTOR_LOGIN
 Cargo.lock          @DIRECTOR_LOGIN
 Gemfile             @DIRECTOR_LOGIN
 Gemfile.lock        @DIRECTOR_LOGIN
+*.lock              @DIRECTOR_LOGIN
+*.lockb             @DIRECTOR_LOGIN
+*.lockfile          @DIRECTOR_LOGIN
+npm-shrinkwrap.json @DIRECTOR_LOGIN
+packages.lock.json  @DIRECTOR_LOGIN
+composer.json       @DIRECTOR_LOGIN
+Pipfile             @DIRECTOR_LOGIN
+setup.py            @DIRECTOR_LOGIN
+setup.cfg           @DIRECTOR_LOGIN
+mix.exs             @DIRECTOR_LOGIN
+deno.json           @DIRECTOR_LOGIN
+*.csproj            @DIRECTOR_LOGIN
+flake.nix           @DIRECTOR_LOGIN
+.npmrc              @DIRECTOR_LOGIN
+.yarnrc*            @DIRECTOR_LOGIN
+pip.conf            @DIRECTOR_LOGIN
+.pypirc             @DIRECTOR_LOGIN
 
 # High-risk code. Adjust once the code layout exists.
 **/auth/**          @DIRECTOR_LOGIN

@@ -78,6 +78,13 @@ jobs:
   spec-verify:
     # Traceability and red-green, judged from the result files with the tooling and
     # policy of the base branch. Nothing from the pull request is executed here.
+    #
+    # The result files were produced by a job that ran the pull request's code, so
+    # they are untrusted input. The order of the steps is part of the defence:
+    #   1. the artifact is unpacked in the runner's temp directory, outside both checkouts
+    #   2. only plain *.xml files and collected.json are copied on; a symbolic link fails the job
+    #   3. the pull request's tree is checked out (for its specs), then the base branch
+    #      LAST, into a directory nothing earlier could have prepared
     needs: ci
     if: always() && (github.event_name == 'push' || github.event.pull_request.draft == false)
     runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
@@ -90,6 +97,37 @@ jobs:
       HEAD_REF: ${{ github.head_ref }}
       BASE_REF: ${{ github.base_ref }}
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: junit
+          path: ${{ runner.temp }}/artifact
+      - name: Results of the newest run on the base branch that has any
+        if: github.event_name == 'pull_request'
+        run: |
+          # Whatever that run concluded: a test case that passed there must still pass.
+          # Insisting on a green run would make a red main impossible to repair.
+          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
+            --status completed --limit 30 --json databaseId --jq '.[].databaseId')"
+          for id in $ids; do
+            rm -rf "$RUNNER_TEMP/main-artifact"
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -n junit -D "$RUNNER_TEMP/main-artifact" 2>/dev/null; then
+              echo "comparing against run $id on $BASE_REF"; exit 0
+            fi
+          done
+          rm -rf "$RUNNER_TEMP/main-artifact"
+          echo "::warning::no ci run on $BASE_REF has results (a new project, or they expired); nothing to compare against"
+      - name: Keep only plain result files
+        run: |
+          RESULTS="$RUNNER_TEMP/results"
+          rm -rf "$RESULTS"; mkdir -p "$RESULTS/junit" "$RESULTS/base-overlay" "$RESULTS/main"
+          keep() {  # keep SOURCE_DIR DESTINATION_DIR
+            [ -d "$1" ] || return 0
+            if [ -n "$(find "$1" -type l -print -quit)" ]; then echo "::error::$1 contains a symbolic link"; exit 1; fi
+            find "$1" -maxdepth 1 -type f \( -name '*.xml' -o -name 'collected.json' \) -exec cp -- {} "$2/" \;
+          }
+          keep "$RUNNER_TEMP/artifact/junit" "$RESULTS/junit"
+          keep "$RUNNER_TEMP/artifact/base-overlay" "$RESULTS/base-overlay"
+          keep "$RUNNER_TEMP/main-artifact/junit" "$RESULTS/main"
       - uses: actions/checkout@v4
         with:
           path: head
@@ -102,25 +140,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
-        with:
-          name: junit
-          path: head/reports
-      - name: Results of the last green run on the base branch
-        if: github.event_name == 'pull_request'
-        run: |
-          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
-            --limit 30 --json databaseId,conclusion,status)"
-          run_id="$(printf '%s' "$runs" | python3 -I -c 'import json,sys; r=[x for x in json.load(sys.stdin) if x["conclusion"]=="success"]; print(r[0]["databaseId"] if r else "")')"
-          total="$(printf '%s' "$runs" | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))')"
-          if [ -n "$run_id" ]; then
-            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n junit -D main-reports
-          elif [ "$total" = "0" ]; then
-            echo "::warning::$BASE_REF has never run ci; nothing to compare against yet"
-          else
-            echo "::error::$BASE_REF has ci runs but none of the last $total is green; fix $BASE_REF first"
-            exit 1
-          fi
       # The judge is the base branch's copy, started with -I: `python3 -m` would put the
       # working directory (the pull request's tree) first on the import path.
       - name: Traceability
@@ -128,8 +147,9 @@ jobs:
         env:
           AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
         run: |
-          set -- --junit 'reports/junit/*.xml'
-          [ -d ../main-reports ] && set -- "$@" --base-junit '../main-reports/junit/*.xml'
+          RESULTS="$RUNNER_TEMP/results"
+          set -- --junit "$RESULTS/junit/*.xml"
+          [ -n "$(ls -A "$RESULTS/main")" ] && set -- "$@" --base-junit "$RESULTS/main/*.xml"
           [ -n "$HEAD_REF" ] && set -- "$@" --branch "$HEAD_REF"
           python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" trace "$@"
       - name: Red-green
@@ -137,4 +157,4 @@ jobs:
         working-directory: head
         env:
           AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
-        run: python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" redgreen-judge --base-dir reports/base-overlay --junit 'reports/junit/*.xml' --branch "$HEAD_REF"
+        run: python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" redgreen-judge --base-dir "$RUNNER_TEMP/results/base-overlay" --junit "$RUNNER_TEMP/results/junit/*.xml" --branch "$HEAD_REF"

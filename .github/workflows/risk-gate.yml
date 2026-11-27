@@ -3,6 +3,11 @@ name: risk-gate
 # Required status check: risk-gate.
 # T0 and T1 pass. T2 passes only once a human listed in policy/roles.toml has
 # approved the current head commit. Re-runs when a review is submitted.
+#
+# The tier is published twice. The label `tier:T?` on the pull request is for
+# people. The commit status `risk-tier/T?` on the head commit is what the
+# conductor reads when it decides whether it may merge: an agent's token can
+# edit labels, but cannot write a commit status.
 
 on:
   pull_request:
@@ -58,6 +63,16 @@ jobs:
           for t in T0 T1 T2; do
             if [ "$t" = "$TIER" ]; then gh pr edit "$PR" --add-label "tier:$t"; else gh pr edit "$PR" --remove-label "tier:$t" || true; fi
           done
+
+      - name: Record the tier on the commit, for the conductor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TIER: ${{ steps.tier.outputs.tier }}
+        run: |
+          case "$TIER" in T0|T1|T2) ;; *) echo "::error::unexpected tier: $TIER"; exit 1 ;; esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=success -f context="risk-tier/$TIER" \
+            -f description="risk tier of this commit, computed by risk-gate"
 
       # agent-review is a required status. The conductor only asks for an agent
       # review on story branches, so everything else is settled here: documentation
