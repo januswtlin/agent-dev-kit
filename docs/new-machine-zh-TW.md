@@ -2,7 +2,15 @@
 
 *English: [new-machine.md](new-machine.md)。兩份內容不一致時以英文版為準。*
 
-每位名下會有 story 交給 agent 的人各自執行。第 2、3、5 節是每個人在每個專案做一次；第 4 節是每台電腦做一次，換新電腦時重做。前提是專案已經建立（[new-project-zh-TW.md](new-project-zh-TW.md)）。
+每位名下會有 story 交給 agent 的人各自執行。第 2、3、5 節是每個人在每個專案做一次；第 4 節是每台電腦做一次，換新電腦時重做。
+
+前提是專案已經建立：[new-project-zh-TW.md](new-project-zh-TW.md) 的第 1 到第 5 節已經做完。也就是說，repo 已經存在而且 `main` 上是 template 的內容，Conductor App 已經安裝，`conductor` environment 已經建立並帶有它的 branch rule，ruleset 也已經套用。如果你就是設定專案的人，先做完那五節再回來。
+
+這份文件裡的每個指令，都在你的專案 clone 裡、在 default branch 上執行。如果你還沒有 clone，就在不受 iCloud 同步的位置建立一個：
+
+```bash
+mkdir -p ~/dev && cd ~/dev && gh repo clone OWNER/REPO && cd REPO
+```
 
 標示 **待驗證** 的地方還沒在真實的帳號或機器上跑過。做的時候請對照當下的官方文件，並把結果回寫到這份文件。
 
@@ -38,7 +46,7 @@ gh variable get --help
 | `write` | design、tests、impl、fix、resolve-conflict、fix-main、product-owner、planner | write | read | write |
 | `read` | review、triage，以及該檔案沒有列出的任何 stage | read | write | write |
 
-所以能 push 的 token 不能開 pull request，也不能 review 或 merge；能 review 的 token 不能 push。App 本身需要 Pull requests: Read and write，是因為 review stage 的 token 要寫入 pull request；需要 Contents: Read and write，是因為建置類 stage 的 token 要 push。開 pull request 與 merge 是 conductor 的工作。**待驗證**：GitHub 確實會簽發這樣縮小權限的 installation token，而且 `write` token 嘗試開 pull request 或 merge 時會得到 403（[redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) 的 C17）。
+所以能 push 的 token 不能開 pull request，也不能 review；能 review 的 token 不能 push。Merge 是另一回事。GitHub 的 merge endpoint 只要求 Contents: write，而 `write` token 有這個權限，所以擋住 agent merge 的不是 token，而是 `main-merge` ruleset：只有 repo admin 與 Conductor App 可以更新 default branch。App 本身需要 Pull requests: Read and write，是因為 review stage 的 token 要寫入 pull request；需要 Contents: Read and write，是因為建置類 stage 的 token 要 push。開 pull request 與 merge 是 conductor 的工作。**待驗證**：GitHub 確實會簽發這樣縮小權限的 installation token；`write` token 嘗試開 pull request 時會被拒絕；而且 `main-merge` ruleset 會拒絕它 merge 一個其他條件都已就緒的 pull request（[redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) 的 C17）。
 
 留下 App 的 ID 與 private key 檔。第 4 節會把它們放在你的 Mac 上、sandbox 之外。**待驗證**：`agentctl app-token` 還沒對真實 API 執行過。
 
@@ -56,7 +64,12 @@ gh variable get --help
 
 Claude review 只需要你建立 `CLAUDE_CODE_OAUTH_TOKEN` 這一個憑證。在 GitHub 上，review job 用的是 Actions 發給該 job 的 token。
 
-屬於某個人訂閱的 secret（`DISPATCH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`）可以按開發者分開存放：在名稱後面加上大寫的帳號，其他字元換成 `_`，例如 `DISPATCH_TOKEN_ALICE`。Conductor 處理某位開發者的 story 時先找他專屬的 secret，找不到才用不帶後綴的名稱。只有一個人時，用不帶後綴的名稱就夠了。
+要用哪個名稱存放它們，取決於 sprint 檔怎麼分配 story：
+
+- Sprint 檔沒有交給特定人的 story（`assignee = "default"`，而且 `[owners]` 裡沒有它的項目）使用不帶後綴的名稱：`DISPATCH_TOKEN`。
+- Sprint 檔交給指名的人的 story 只使用那個人的名稱：在不帶後綴的名稱後面加上大寫的帳號，其他字元換成 `_`，例如 `DISPATCH_TOKEN_ALICE` 或 `CLAUDE_TRIGGER_URL_ALICE_SMITH`。如果那個 secret 不存在，派發會失敗並說明原因。它不會退回去用不帶後綴的名稱，因為那樣會在沒有人察覺的情況下，用另一個人的訂閱去跑某個人的 story。
+
+只有一個人時，可以保留 `assignee = "default"` 並使用不帶後綴的名稱，也可以在 sprint 檔裡指名自己並使用後綴。有好幾個人時，讓每個人都用帶後綴的 secret，並為每個 story 指名 owner。
 
 ## 4. Mac 與 sandbox
 
@@ -84,7 +97,7 @@ mv ~/Downloads/YOUR_APP.private-key.pem ~/.config/agent-app/key.pem && chmod 600
 
 **只從 default branch 的乾淨 checkout 執行它。** 絕對不要在你切出來的 agent branch 上執行。這支 script 在 Mac 上以你的權限執行。如果目前切在 agent 的 branch 上，你執行的那份 script 就是 agent 寫的。為了防止這種意外，`setup`、`up`、`job` 在 `sandbox/`、`tools/`、`bin/` 或 `policy/` 與 default branch（以你的 clone 上次 fetch 到的為準）不同時會拒絕執行；`sandbox/`、`tools/`、`bin/` 內有未追蹤的檔案時也一樣。`bin/agentctl conductor here` 有相同的檢查。這項檢查本身就是那些 script 的一部分，所以它保護不了一個已經被動過手腳的 checkout。這條規則要靠你自己遵守：留一個永遠停在 default branch 的 checkout，host 上的指令只從那裡執行。`AGENT_ALLOW_MODIFIED_SCRIPTS=1` 會關掉這項檢查，它是給開發這些 script 本身時用的。
 
-**專案目錄內不可以放任何機密，被 git 忽略的檔案也算。** Clone 模式會把整個目錄以唯讀方式掛進每個 sandbox，位置是 `/run/sandbox/source`。這包含 git 忽略的檔案，例如 `.env` 檔。只要找到檔名像機密的被忽略檔案，script 就拒絕執行 setup 或建立 sandbox。這些檔名是：`.env*`、`*.pem`、`*.key`、`*.p12`、`id_rsa*`、`id_ed25519*`、`credentials*`，以及任何含有 `secret` 的名稱。它會列出這些檔案然後停止。請把它們移出 repo。這項檢查只看檔名，換個名字的機密就找不到，不要依賴它。`AGENT_ALLOW_FILES_IN_TREE=1` 可以讓 script 照樣繼續。本機 conductor 自己的憑證也因為這個原因放在 repo 之外：`~/.config/agent-dev/OWNER-REPO/conductor.env`（[operations-zh-TW.md](operations-zh-TW.md) 第 1 節）。
+**專案目錄內不可以放任何機密，被 git 忽略的檔案也算。** Clone 模式會把整個目錄以唯讀方式掛進每個 sandbox，位置是 `/run/sandbox/source`。這包含 git 忽略的檔案，例如 `.env` 檔，也包含 git 單純沒有追蹤的檔案。只要找到檔名像機密的未追蹤檔案，不論是否被忽略，script 就拒絕設定機器、建立 sandbox 或重新接上既有的 sandbox。這些檔名是：`.env*`、`*.pem`、`*.key`、`*.p12`、`*.pfx`、`id_rsa*`、`id_ed25519*`、`id_ecdsa*`、`credentials*`、`.netrc`、`.npmrc`、`.pypirc`，以及任何含有 `secret` 的名稱，不分大小寫。它會列出這些檔案然後停止。請把它們移出 repo。這項檢查只看檔名，換個名字的機密就找不到，不要依賴它。`AGENT_ALLOW_FILES_IN_TREE=1` 可以讓 script 照樣繼續。本機 conductor 自己的憑證也因為這個原因放在 repo 之外：`~/.config/agent-dev/OWNER-REPO/conductor.env`（[operations-zh-TW.md](operations-zh-TW.md) 第 1 節）。
 
 接著：
 

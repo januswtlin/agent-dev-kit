@@ -36,8 +36,8 @@ Agents can only push branches. Every other step is guarded by GitHub rulesets an
 | Document | Contents |
 |---|---|
 | [docs/guideline.md](docs/guideline.md) | Design and rationale. Read this first |
-| [docs/new-project.md](docs/new-project.md) | Once per project: repo, conductor, rulesets, the spike |
-| [docs/new-machine.md](docs/new-machine.md) | Once per person and computer: agent identity, sandbox, cloud accounts |
+| [docs/new-project.md](docs/new-project.md) | Once per project: repo, conductor, rulesets, the spike. The first person does its sections 1 to 5, then all of new-machine.md, then returns for the spike |
+| [docs/new-machine.md](docs/new-machine.md) | Once per person and computer: agent identity, sandbox, cloud accounts. Needs sections 1 to 5 of new-project.md to be done |
 | [docs/operations.md](docs/operations.md) | Day to day: where the conductor runs, auto-merge, adding a person |
 | [docs/threat-model.md](docs/threat-model.md) | Threats and the controls that answer them |
 | [docs/redteam-project.md](docs/redteam-project.md), [docs/redteam-machine.md](docs/redteam-machine.md) | Checklists that verify the defences really work, for the project and for each computer |

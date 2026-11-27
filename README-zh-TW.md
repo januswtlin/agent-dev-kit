@@ -36,8 +36,8 @@ Agent 只能推 branch。其餘的每一步都由 GitHub 的 ruleset 與檢查�
 | 文件 | 內容 |
 |---|---|
 | [docs/guideline-zh-TW.md](docs/guideline-zh-TW.md) | 設計與理由。先讀這份 |
-| [docs/new-project-zh-TW.md](docs/new-project-zh-TW.md) | 每個專案做一次：repo、conductor、rulesets、spike |
-| [docs/new-machine-zh-TW.md](docs/new-machine-zh-TW.md) | 每個人、每台電腦做一次：agent 身分、sandbox、雲端帳號 |
+| [docs/new-project-zh-TW.md](docs/new-project-zh-TW.md) | 每個專案做一次：repo、conductor、rulesets、spike。第一個人先做它的第 1 到 5 節，再做完整份 new-machine，然後回來做 spike |
+| [docs/new-machine-zh-TW.md](docs/new-machine-zh-TW.md) | 每個人、每台電腦做一次：agent 身分、sandbox、雲端帳號。需要 new-project 的第 1 到 5 節已經完成 |
 | [docs/operations-zh-TW.md](docs/operations-zh-TW.md) | 日常：conductor 在哪裡跑、自動合併、新增一個人 |
 | [docs/threat-model-zh-TW.md](docs/threat-model-zh-TW.md) | 威脅與對應的控制 |
 | [docs/redteam-project-zh-TW.md](docs/redteam-project-zh-TW.md)、[docs/redteam-machine-zh-TW.md](docs/redteam-machine-zh-TW.md) | 驗證防線真的有效的測試清單，專案一份、每台電腦一份 |

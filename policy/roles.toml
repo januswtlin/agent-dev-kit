@@ -32,8 +32,13 @@ planner = "claude"
 #                  developer's Lima VM. NOT part of the supported setup: that VM is
 #                  long-lived and shared between stages (sandbox/runner/README.md)
 #
-# Credentials are per developer: the conductor looks for NAME_<LOGIN> first (login
-# in upper case, other characters as "_"), then NAME.
+# Credentials are per developer. A story the sprint file gives to a named person
+# uses NAME_<LOGIN> only (login in upper case, other characters as "_"); a story of
+# "default" uses NAME. There is no fallback from one to the other.
+#
+# A review that runs in a local sandbox (via = "sbx", no review_workflow) reports
+# as a pull request review. It only counts when the reviewing agent App's login is
+# listed in the repository variable REVIEW_BOTS.
 # Which cloud paths work with your accounts is settled by the spike in
 # docs/new-project.md. Switch a harness to via = "sbx" if its cloud path does not.
 
