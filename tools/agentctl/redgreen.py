@@ -82,8 +82,9 @@ def check(spec: Spec, base_results: dict[str, TcResult], head_results: dict[str,
     new test file could not even be imported, which the runner records). If the
     base run produced no report at all, nothing has been shown and the check fails.
     The same holds when the setup command failed there, and when a test case is
-    missing from a base report in which nothing at all is red: then the overlaid
-    test simply did not run.
+    missing from a base report in which nothing red belongs to the overlaid test
+    files (`base_red_count` counts only those): then the story's tests simply did
+    not run, whatever else failed.
     """
     problems = []
     if setup_exit not in (None, 0):
@@ -107,5 +108,6 @@ def check(spec: Spec, base_results: dict[str, TcResult], head_results: dict[str,
         elif base.status == "skipped":
             problems.append(f"{tc.id}: was skipped on base, which does not show that it fails there")
         elif base.status == "missing" and base_red_count == 0:
-            problems.append(f"{tc.id}: is not in the base report and nothing failed there, so its test did not run on base")
+            problems.append(f"{tc.id}: is not in the base report and no failure there belongs to this story's "
+                            "test files, so its test did not run on base")
     return problems

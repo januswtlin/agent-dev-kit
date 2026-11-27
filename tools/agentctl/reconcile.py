@@ -287,6 +287,26 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
         else:
             actions.append(Action("escalate", story=story.id, reason=why))
 
+    # Which started stories may be given new work in this pass. Normally all of
+    # them: the WIP limit and the `touches` rule are applied when a story starts.
+    # But stories that were parked (waiting for a dependency added later) or
+    # blocked on a person gave their slot away, and several can come back at once.
+    # Then the lowest ids go first, within the limit and without two that touch
+    # the same thing; the rest wait until one of those is merged.
+    admitted: set[str] = set()
+    slots, held = 0, set()
+    for story in sorted(stories.values(), key=lambda s: s.id):
+        if (story.done or not story.started or "needs-human" in story.labels or "blocked" in story.labels
+                or not all(satisfied(dep) for dep in story.deps)):
+            continue
+        if _human_blocked(story):
+            admitted.add(story.id)  # waits for a person; holds its claim but no slot
+            held.update(story.touches)
+        elif slots < policy["wip_limit"] and not (held & set(story.touches)):
+            admitted.add(story.id)
+            slots += 1
+            held.update(story.touches)
+
     # 1. Advance stories already in progress.
     for story in sorted(stories.values(), key=lambda s: s.id):
         if story.done or not story.started or "needs-human" in story.labels or "blocked" in story.labels:
@@ -295,6 +315,23 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
 
         if not all(satisfied(dep) for dep in story.deps):
             continue  # a dependency was added after it started (triage); it waits for that story
+
+        # Auto-merge stays on the pull request once enabled, whatever is pushed
+        # afterwards. So it is withdrawn the moment the pull request is no longer
+        # exactly what the decision was about, and enabled again if it earns it.
+        armed = story.pr
+        if armed is not None and armed.auto_merge:
+            eligible = (not armed.draft and not armed.awaiting_human_review
+                        and _checks_state(armed, MECHANICAL_CHECKS) == "success"
+                        and armed.checks.get(REVIEW_CHECK, "pending") == "success"
+                        and armed.tier in policy["auto_merge_tiers"])
+            if not eligible:
+                actions.append(Action("disable-auto-merge", story=story.id, reason="no longer meets what auto-merge was enabled for"))
+                continue
+
+        if story.id not in admitted:
+            waiting += 1  # over the limit after several stories came back at once
+            continue
 
         if story.triage_verdict == "retry" and d is not None and d.stage == "triage":
             stage = next((s for s in BUILD_STAGES if s not in story.stage_done), "review")

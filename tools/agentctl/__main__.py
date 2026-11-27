@@ -81,7 +81,16 @@ def cmd_trace(args) -> int:
     all_specs = specs.load_all(root / "docs/specs")
     story = args.story or _story_from_branch(args.branch or _current_branch())
     head = trace.parse_junit(args.junit)
-    base = trace.parse_junit(args.base_junit) if args.base_junit else None
+    base = None
+    if args.base_junit:
+        # One directory per earlier run. A test case that passed in any of them must
+        # still pass: one partial or broken run on main must not make it forgettable.
+        import glob as _glob
+        by_run: dict[str, list[str]] = {}
+        for pattern in args.base_junit:
+            for path in sorted(_glob.glob(pattern, recursive=True)):
+                by_run.setdefault(str(Path(path).parent), []).append(path)
+        base = trace.passed_in_any([trace.parse_junit(paths) for paths in by_run.values()])
     retired = specs.load_retired(root / "docs/specs")
     return _finish("traceability", trace.check(all_specs, head, story, base, retired))
 
@@ -145,7 +154,9 @@ def cmd_redgreen_judge(args) -> int:
     setup_exit = collected.get("setup_exit")
     return _finish("red-green", redgreen.check(
         all_specs[story], trace.parse_junit([str(base_dir / "*.xml")]), trace.parse_junit(args.junit),
-        base_report_count=reports, base_red_count=trace.count_red([str(base_dir / "*.xml")]),
+        base_report_count=reports,
+        base_red_count=trace.count_red([str(base_dir / "*.xml")],
+                                       [Path(str(p)).stem for p in collected.get("overlay") or [] if isinstance(p, str)]),
         setup_exit=setup_exit if isinstance(setup_exit, int) else None))
 
 
@@ -189,32 +200,39 @@ def cmd_reconcile(args) -> int:
         try:
             decision, local_developer = verdict()
         except github.Unreadable as exc:
-            print(f"{exc}; doing nothing rather than guessing who holds the lease")
-            return 1
+            # Who holds the lease is unknown, so nothing is dispatched. The run still
+            # goes on, restricted to what is safe from anywhere: stopping.
+            print(f"{exc}; not dispatching. Withdrawing auto-merge is still attempted.")
+            decision, local_developer = "skip", ""
         if decision == "skip":
-            if not local_developer:
-                print("a local conductor holds the lease; nothing to do here")
-                return 0
-            # That conductor leaves other developers' stories alone. Dispatch those
-            # from here, and nothing else: everything else is its to do.
-            print(f"a local conductor holds the lease for {local_developer}; dispatching other developers' stories only")
+            # That conductor does everything except other developers' stories, which it
+            # leaves alone. Dispatch those from here. Withdrawing auto-merge is safe
+            # from anywhere and is done from here too, so that a pause never waits
+            # for a Mac that may be gone.
+            print(f"a local conductor holds the lease ({local_developer or 'developer unknown'}); "
+                  "only other developers' stories and auto-merge withdrawals are handled here")
 
             def only(action, context) -> bool:
-                # The kill switch is everybody's: a pause is acted on from here too.
                 if action.kind in ("halt", "disable-auto-merge"):
                     return True
                 owner = context.get("assignees", {}).get(action.story, "")
-                return action.kind == "dispatch" and bool(owner) and owner != local_developer
+                return bool(local_developer) and action.kind == "dispatch" and bool(owner) and owner != local_developer
 
             def guard() -> bool:
-                return verdict() == ("skip", local_developer)
+                try:
+                    return bool(local_developer) and verdict() == ("skip", local_developer)
+                except github.Unreadable:
+                    return False
         else:
             if decision == "takeover" and not args.dry_run:
                 print("the local conductor's lease expired; GitHub Actions takes over")
                 github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
 
             def guard() -> bool:
-                return verdict()[0] != "skip"
+                try:
+                    return verdict()[0] != "skip"
+                except github.Unreadable:
+                    return False
     return 1 if _reconcile_once(root, args.dry_run, only=only, guard=guard) else 0
 
 
@@ -318,6 +336,11 @@ def cmd_conductor(args) -> int:
             # not keep Actions standing down while nothing advances.
             failures = failures + 1 if failed else 0
             if failures == 0:
+                # The pass may have stopped early because the lease moved. Renewing
+                # then would take it back from whoever holds it now.
+                if not mine():
+                    print("another conductor holds the lease; stopping")
+                    return 0
                 renew()
             elif failures >= 3:
                 github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions", check=False)

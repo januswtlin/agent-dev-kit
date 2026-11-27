@@ -119,7 +119,7 @@ def ensure_issue(label: str, title: str, body: str, read_only: bool) -> dict:
     return find_issue(label) or {"number": 0, "labels": [], "comments": []}
 
 
-def trusted_authors(roles: dict) -> set[str]:
+def trusted_authors(roles: dict, extra_bot: str = "") -> set[str]:
     """Logins whose marker comments are believed: the conductor and the humans.
 
     The bot is accepted with and without its "[bot]" suffix, because GitHub's
@@ -128,7 +128,7 @@ def trusted_authors(roles: dict) -> set[str]:
     collaborator on this repository to comment at all.
     """
     logins = {str(h) for h in roles.get("humans", [])}
-    for bot in (os.environ.get("CONDUCTOR_BOT", ""), variable("CONDUCTOR_BOT")):
+    for bot in (os.environ.get("CONDUCTOR_BOT", ""), extra_bot):
         if bot:
             logins.add(bot)
             logins.add(bot.removesuffix("[bot]"))
@@ -230,7 +230,20 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
     default_branch = (view.get("defaultBranchRef") or {}).get("name") or "main"
     default_owner = str(sprint.get("assignee", "default"))
     owners = {str(k): str(v) for k, v in (sprint.get("owners") or {}).items()}
-    authors = trusted_authors(roles)
+    # The variables are read first and together. Fail closed: when one of them
+    # cannot be read, the pass behaves as if the kill switch were on, and still
+    # gets far enough to withdraw auto-merge.
+    pause_reason = "kill switch is on"
+    extra_bot, quota = "", {}
+    try:
+        paused = variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes")
+        extra_bot = variable("CONDUCTOR_BOT")
+        quota = json.loads(variable("CONDUCTOR_QUOTA") or "{}")
+    except Unreadable as exc:
+        paused, quota, pause_reason = True, {}, f"treated as paused: {exc}"
+    except json.JSONDecodeError:
+        quota = {}
+    authors = trusted_authors(roles, extra_bot)
 
     prs = gh_json(
         "pr", "list", "--state", "all", "--limit", "300", "--json",
@@ -320,8 +333,11 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
         )
 
     # Stories merged in an earlier sprint satisfy a dependency without being in this one.
-    merged_elsewhere = {m.group(1) for p in prs if p.get("state") == "MERGED" and p.get("baseRefName") == default_branch
-                        and not p.get("isCrossRepository") and (m := STORY_BRANCH_RE.match(p.get("headRefName", "")))} - set(stories)
+    # Only the branch the spec names counts, as everywhere else.
+    by_branch = {f"story/{sid}-{spec.slug}": sid for sid, spec in specs.items()}
+    merged_elsewhere = {by_branch[p["headRefName"]] for p in prs
+                        if p.get("state") == "MERGED" and p.get("baseRefName") == default_branch
+                        and not p.get("isCrossRepository") and p.get("headRefName") in by_branch} - set(stories)
 
     raw = gh("api", "--paginate", f"repos/{repo}/branches?per_page=100", "--jq", '.[] | [.name, .commit.sha] | @tsv', check=False)
     branches = [tuple(line.split("\t", 1)) for line in raw.splitlines() if "\t" in line]
@@ -330,15 +346,6 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
     main_red = any(c.get("name") == "ci" and c.get("conclusion") == "failure" for c in main_checks)
     fix_main = gh_json("issue", "list", "--label", "fix-main", "--state", "open", "--json", "number", default=[])
 
-    # Fail closed: when the kill switch cannot be read, behave as if it were on.
-    pause_reason = "kill switch is on"
-    try:
-        paused = variable("CONDUCTOR_PAUSED").lower() in ("1", "true", "yes")
-        quota = json.loads(variable("CONDUCTOR_QUOTA") or "{}")
-    except Unreadable as exc:
-        paused, quota, pause_reason = True, {}, f"treated as paused: {exc}"
-    except json.JSONDecodeError:
-        quota = {}
     story_branches = {f"story/{sid}-{spec.slug}" for sid, spec in specs.items()}
     state = State(
         stories=stories,
@@ -386,6 +393,10 @@ def _prompt(action: Action, context: dict) -> str:
         lines.append("Mode: async. Take the first unchecked line of docs/product/roadmap.md.")
     if action.stage == "fix-main":
         lines.append("The default branch is failing its checks. Find the cause, fix it on a branch named chore/fix-main and push.")
+    sha = context.get("shas", {}).get(action.story, "")
+    if action.stage == "review" and sha:
+        lines.append(f"Review commit {sha} and no other. If the head of the pull request is a different commit "
+                     "when you start, stop and report nothing: a review of the new commit will be asked for.")
     lines.append(f"Attempt: {action.attempt}." + (f" Reason for this run: {action.reason}." if action.reason else ""))
     return "\n".join(lines)
 
@@ -618,7 +629,7 @@ def _execute_one(action: Action, context: dict, roles: dict) -> None:
             # meantime, GitHub refuses and the next pass decides again.
             gh("pr", "merge", number, "--auto", "--squash", "--match-head-commit", sha)
     elif action.kind == "disable-auto-merge":
-        number = action.reason.lstrip("#")
+        number = str(pr) if pr else action.reason.lstrip("#")
         if number.isdigit():
             gh("pr", "merge", number, "--disable-auto")
     elif action.kind == "escalate":

@@ -101,21 +101,33 @@ jobs:
         with:
           name: junit
           path: ${{ runner.temp }}/artifact
-      - name: Results of the newest run on the base branch that has any
+      - name: Results of the newest runs on the base branch that have any
         if: github.event_name == 'pull_request'
         run: |
-          # Whatever that run concluded: a test case that passed there must still pass.
-          # Insisting on a green run would make a red main impossible to repair.
+          # Up to five runs, whatever they concluded: a test case that passed in any of
+          # them must still pass. Insisting on a green run would make a red main
+          # impossible to repair; taking only the newest would let one partial run on
+          # main make older coverage forgettable.
+          # "No results" has to be told apart from "could not find out": an artifact
+          # that is absent or expired is skipped, a failed listing or download is an error.
           ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
             --status completed --limit 30 --json databaseId --jq '.[].databaseId')"
+          found=0
           for id in $ids; do
-            rm -rf "$RUNNER_TEMP/main-artifact"
-            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -n junit -D "$RUNNER_TEMP/main-artifact" 2>/dev/null; then
-              echo "comparing against run $id on $BASE_REF"; exit 0
-            fi
+            [ "$found" -lt 5 ] || break
+            state="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts" \
+              --jq '[.artifacts[] | select(.name == "junit")] | if length == 0 then "none" elif .[0].expired then "expired" else "present" end')" \
+              || { echo "::error::cannot list the artifacts of run $id on $BASE_REF"; exit 1; }
+            [ "$state" = "present" ] || continue
+            gh run download "$id" --repo "$GITHUB_REPOSITORY" -n junit -D "$RUNNER_TEMP/main-artifact/$id" \
+              || { echo "::error::run $id on $BASE_REF has results but they could not be downloaded"; exit 1; }
+            found=$((found + 1))
           done
-          rm -rf "$RUNNER_TEMP/main-artifact"
-          echo "::warning::no ci run on $BASE_REF has results (a new project, or they expired); nothing to compare against"
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::no ci run on $BASE_REF has results (a new project, or they expired); nothing to compare against"
+          else
+            echo "comparing against $found run(s) on $BASE_REF"
+          fi
       - name: Keep only plain result files
         run: |
           RESULTS="$RUNNER_TEMP/results"
@@ -127,7 +139,11 @@ jobs:
           }
           keep "$RUNNER_TEMP/artifact/junit" "$RESULTS/junit"
           keep "$RUNNER_TEMP/artifact/base-overlay" "$RESULTS/base-overlay"
-          keep "$RUNNER_TEMP/main-artifact/junit" "$RESULTS/main"
+          for run in "$RUNNER_TEMP"/main-artifact/*/; do
+            [ -d "$run" ] || continue
+            mkdir -p "$RESULTS/main/$(basename "$run")"
+            keep "${run}junit" "$RESULTS/main/$(basename "$run")"
+          done
       - uses: actions/checkout@v4
         with:
           path: head
@@ -149,7 +165,7 @@ jobs:
         run: |
           RESULTS="$RUNNER_TEMP/results"
           set -- --junit "$RESULTS/junit/*.xml"
-          [ -n "$(ls -A "$RESULTS/main")" ] && set -- "$@" --base-junit "$RESULTS/main/*.xml"
+          [ -n "$(ls -A "$RESULTS/main")" ] && set -- "$@" --base-junit "$RESULTS/main/*/*.xml"
           [ -n "$HEAD_REF" ] && set -- "$@" --branch "$HEAD_REF"
           python3 -I "$GITHUB_WORKSPACE/base/tools/run.py" trace "$@"
       - name: Red-green

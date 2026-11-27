@@ -104,7 +104,9 @@ no_secrets_in_tree() {
   # Clone mode mounts the whole directory: every file that is not tracked is listed
   # here, whether git ignores it or not.
   local found
-  found="$(git -C "$project" ls-files --others 2>/dev/null \
+  # -z: names arrive as they are. Otherwise git quotes a path with unusual
+  # characters, and the closing quote would hide the file's ending from the pattern.
+  found="$(git -C "$project" ls-files --others -z 2>/dev/null | tr '\n\0' '?\n' \
     | grep -iE '(^|/)(\.env[^/]*|[^/]*\.pem|[^/]*\.key|[^/]*\.p12|[^/]*\.pfx|id_rsa[^/]*|id_ed25519[^/]*|id_ecdsa[^/]*|credentials[^/]*|[^/]*secret[^/]*|\.netrc|\.npmrc|\.pypirc)$' || true)"
   if [ -n "$found" ] && [ "${AGENT_ALLOW_FILES_IN_TREE:-0}" != "1" ]; then
     echo "These untracked files in $project would be readable from inside every sandbox:" >&2
@@ -116,22 +118,39 @@ no_secrets_in_tree() {
 # What the sandbox can really reach, asked from inside it. `setup` configures a
 # deny-all preset once, but the preset is machine-wide and can be changed behind
 # this script's back, and a sandbox that already exists keeps what it was given.
-probe() {  # probe NAME URL -> prints REACHED, BLOCKED or NOCURL
+#
+# This is a spot check, not a proof of the allowlist: it asks for one host that must
+# be reachable and one or two that must not be. The three URLs all answer 200 when
+# they are reached, which is what lets the answers be told apart:
+#   "HTTP 2xx/3xx"  the request got through
+#   "HTTP 4xx/5xx"  something answered in the host's place: taken as the proxy's refusal
+#   "NONE"          no answer at all: refused, or no network
+# The first probe (a host on the allowlist) separates "refused" from "no network".
+probe() {  # probe NAME URL -> prints "HTTP <code>", NONE or NOCURL; nothing if sbx exec failed
   # shellcheck disable=SC2016  # expanded by the shell inside the sandbox
   sbx exec "$1" -- sh -c 'command -v curl >/dev/null 2>&1 || { echo NOCURL; exit 0; }
-    if curl -fsS -o /dev/null -m 10 "$1" 2>/dev/null; then echo REACHED; else echo BLOCKED; fi' sh "$2" 2>/dev/null | tail -n 1
+    code="$(curl -sS -o /dev/null -m 10 -w "%{http_code}" "$1" 2>/dev/null)" || code=000
+    if [ "$code" = "000" ]; then echo NONE; else echo "HTTP $code"; fi' sh "$2" 2>/dev/null | tail -n 1 || true
 }
 verify_network() {  # verify_network NAME NETWORK
   local result url
+  cannot_check() {
+    [ "${AGENT_SKIP_NETWORK_PROBE:-0}" = "1" ] && return 0
+    die "cannot check what sandbox $1 can reach: $2.
+To proceed without the check: AGENT_SKIP_NETWORK_PROBE=1"
+  }
+  result="$(probe "$1" https://github.com/)"
+  case "$result" in
+    "HTTP 2"??|"HTTP 3"??) ;;
+    *) cannot_check "$1" "github.com, which is on the allowlist, did not answer from inside it (${result:-sbx exec failed})"; return 0 ;;
+  esac
   for url in https://example.com/ $([ "$2" = "build" ] || echo https://registry.npmjs.org/); do
     result="$(probe "$1" "$url")"
     case "$result" in
-      BLOCKED) ;;
-      REACHED) die "sandbox $1 can reach $url, which no rule of this project allows for it.
-The sbx network preset is not deny-all, or a machine-wide rule allows it. See docs/new-machine.md, section 4.
-(Not removed, so that you can inspect it: sbx rm --force $1)" ;;
-      *) [ "${AGENT_SKIP_NETWORK_PROBE:-0}" = "1" ] || die "cannot check what sandbox $1 can reach (no curl inside, or sbx exec failed).
-To proceed without the check: AGENT_SKIP_NETWORK_PROBE=1" ;;
+      NONE|"HTTP 4"??|"HTTP 5"??) ;;
+      "HTTP 2"??|"HTTP 3"??) die "sandbox $1 can reach $url, which no rule of this project allows for it.
+The sbx network preset is not deny-all, or a machine-wide rule allows it. See docs/new-machine.md, section 4." ;;
+      *) cannot_check "$1" "${result:-sbx exec failed}"; return 0 ;;
     esac
   done
 }
@@ -184,7 +203,8 @@ create() {  # create NAME HARNESS STAGE
   read -r scope network settings < <(agentctl stage-profile "$3")
   # Never reuse a sandbox: one left over from another stage would keep that stage's rules.
   if sbx ls 2>/dev/null | grep -qw -- "$1"; then
-    die "sandbox $1 already exists. Remove it first: sbx rm --force $1"
+    # Exit status 3: the caller must not remove a sandbox it did not create.
+    echo "sandbox $1 already exists. Remove it first: sbx rm --force $1" >&2; exit 3
   fi
   (cd "$project" && sbx create --clone --name "$1" "$2" .)
   # The real token never enters the VM: the proxy asks the helper when it needs one.
@@ -240,6 +260,7 @@ That removes ALL your existing sbx network rules and starts from deny-all."
       # The sandbox keeps what it was created with; the directory it mounts and the
       # machine's network preset may have changed since.
       echo "re-attaching to $name (created for stage $stage)"
+      same_repository
       no_secrets_in_tree
       read -r _ network _ < <(agentctl stage-profile "$stage")
       verify_network "$name" "$network"
@@ -253,14 +274,26 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     harness="${2:?usage: sbx.sh job HARNESS STORY STAGE PROMPT}"; story="${3:?story id}"; stage="${4:?stage}"; prompt="${5:?prompt}"
     valid_harness "$harness"; valid_story "$story"; valid_stage "$stage"
     trusted_checkout
-    stamp="$(date +%s)"
+    # Unique per invocation: the second in hex, plus a random byte for two jobs
+    # started within the same second.
+    stamp="$(printf '%x%02x' "$(date +%s)" "$((RANDOM % 256))")"
     name="ag-$tag-$story-$stage-$harness-$stamp"
     valid_name "$name"
     mkdir -p "$log_dir"
     log="$log_dir/$story-$stage-$harness-$stamp.log"
     # In a subshell, so that a refusal inside it comes back here and is shown.
-    # A sandbox that failed a check is removed: nobody is there to inspect it.
-    ( create "$name" "$harness" "$stage" ) > "$log" 2>&1 || { cat "$log" >&2; sbx rm --force "$name" >> "$log" 2>&1 || true; exit 1; }
+    # A sandbox that failed a check is removed: nobody is there to inspect it. But
+    # only if this invocation created it (status 3: the name was already taken).
+    rc=0
+    ( create "$name" "$harness" "$stage" ) > "$log" 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      cat "$log" >&2
+      [ "$rc" -eq 3 ] || sbx rm --force "$name" >> "$log" 2>&1 || true
+      exit 1
+    fi
+    # From here on the sandbox is this invocation's: remove it however this ends,
+    # an interrupt included.
+    trap 'sbx rm --force "$name" >> "$log" 2>&1 || echo "WARNING: could not remove sandbox $name" >> "$log"' EXIT
     case "$harness" in
       claude) set -- -p "$prompt" ;;
       codex)  set -- exec "$prompt" ;;
@@ -270,7 +303,6 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     # afterwards whatever happened; the log stays on the host.
     status=0
     sbx run --name "$name" -- "$@" >> "$log" 2>&1 || status=$?
-    sbx rm --force "$name" >> "$log" 2>&1 || echo "WARNING: could not remove sandbox $name" >> "$log"
     exit "$status"
     ;;
   check)

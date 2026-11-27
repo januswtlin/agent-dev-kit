@@ -125,6 +125,29 @@ class RedGreenTests(unittest.TestCase):
         self.assertTrue(problems and all("did not run on base" in p for p in problems))
         self.assertEqual(redgreen.check(self.spec, {}, results(ALL_PASS), base_report_count=1, base_red_count=1), [])
 
+    def test_only_failures_of_the_storys_own_test_files_count_as_its_red(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "r.xml").write_text(
+                '<testsuites><testsuite>'
+                '<testcase classname="unittest.loader._FailedTest" name="test_hello"><error>ImportError</error></testcase>'
+                '<testcase classname="test_other.Old" name="test_broken"><failure>x</failure></testcase>'
+                '<testcase classname="test_other.Old" name="test_fine"/>'
+                '</testsuite></testsuites>', encoding="utf-8")
+            pattern = [str(Path(tmp, "*.xml"))]
+            self.assertEqual(trace.count_red(pattern), 2)
+            self.assertEqual(trace.count_red(pattern, ["test_hello"]), 1)
+            self.assertEqual(trace.count_red(pattern, ["test_unrelated"]), 0)
+            self.assertEqual(trace.count_red(pattern, []), 0)
+
+    def test_a_test_case_that_passed_in_any_earlier_run_is_remembered(self):
+        newest = results([("test_tc_012_01_x", "fail")])
+        older = results([("test_tc_012_01_x", "pass"), ("test_tc_012_02_y", "pass")])
+        merged = trace.passed_in_any([newest, older])
+        self.assertEqual(sorted(merged), ["TC-012-01", "TC-012-02"])
+        self.assertTrue(all(r.ok for r in merged.values()))
+
     def test_skipped_on_base_is_not_red(self):
         base = results([("test_tc_000_02_x", "skip")])
         problems = redgreen.check(self.spec, base, results(ALL_PASS), base_report_count=1)

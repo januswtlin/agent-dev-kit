@@ -263,6 +263,39 @@ class Parked(unittest.TestCase):
         self.assertEqual(kinds(run(state(a, b), wip_limit=1)), [("dispatch", "002", "design")])
 
 
+    def test_stories_that_come_back_together_respect_the_limit_and_each_other(self):
+        # Both were parked on 003, which has now merged; both touch the database.
+        def back(sid):
+            return story(sid, touches=["db"], blocked_by=["003"], stage_done={"design"},
+                         last_dispatch=Dispatch("design", NOW - 9999))
+        merged = story("003", pr=PR(3, merged=True))
+        self.assertEqual(kinds(run(state(back("001"), back("002"), merged), wip_limit=1)), [("dispatch", "001", "tests")])
+        # With room for both but the same resource, still one at a time.
+        self.assertEqual(kinds(run(state(back("001"), back("002"), merged), wip_limit=2)), [("dispatch", "001", "tests")])
+
+
+class ArmedAutoMerge(unittest.TestCase):
+    CHECKS = dict(GREEN, **{"agent-review": "success"})
+
+    def armed(self, **kw):
+        pr = PR(1, checks=dict(self.CHECKS), tier="T0", auto_merge=True, head_sha="b", **kw)
+        return story("001", stage_done=DONE, pr=pr, last_dispatch=Dispatch("review", NOW - 60, sha="a"))
+
+    def test_it_is_left_alone_while_the_pull_request_is_what_was_decided_about(self):
+        self.assertEqual(run(state(self.armed()), auto_merge_tiers=["T0"]), [])
+
+    def test_it_is_withdrawn_when_a_new_head_has_not_earned_it(self):
+        pending = self.armed()
+        pending.pr.checks["ci"] = "pending"
+        self.assertEqual(kinds(run(state(pending), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])
+        higher = self.armed()
+        higher.pr.tier = "T1"
+        self.assertEqual(kinds(run(state(higher), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])
+        unreviewed = self.armed()
+        del unreviewed.pr.checks["agent-review"]
+        self.assertEqual(kinds(run(state(unreviewed), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])
+
+
 class SprintLevel(unittest.TestCase):
     def test_sprint_complete_does_not_expand_scope(self):
         st = state(story("001", pr=PR(1, merged=True)), story("002", pr=PR(2, merged=True)))

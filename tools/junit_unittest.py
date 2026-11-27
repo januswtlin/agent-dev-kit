@@ -52,8 +52,10 @@ class Recording(unittest.TestResult):
         self._add(test, "skipped", str(reason))
 
     def addExpectedFailure(self, test, err) -> None:
+        # The assertion failed. unittest calls that a success; for the gates it is
+        # not a test that passed, so it is reported as skipped and counts for nothing.
         super().addExpectedFailure(test, err)
-        self._add(test, "passed")
+        self._add(test, "skipped", "expected failure: the assertion did not hold")
 
     def addUnexpectedSuccess(self, test) -> None:
         super().addUnexpectedSuccess(test)

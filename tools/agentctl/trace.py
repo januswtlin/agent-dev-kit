@@ -68,8 +68,13 @@ def parse_junit(patterns: list[str]) -> dict[str, TcResult]:
     return results
 
 
-def count_red(patterns: list[str]) -> int:
-    """How many test cases in these files failed or errored, with or without a TC id."""
+def count_red(patterns: list[str], names: list[str] | None = None) -> int:
+    """How many test cases in these files failed or errored, with or without a TC id.
+
+    With `names`, only those whose class, name or file mentions one of them. A
+    new test file that cannot even be imported on base shows up as an error
+    named after that file; an unrelated failure elsewhere does not.
+    """
     red = 0
     for pattern in patterns:
         for path in sorted(glob.glob(pattern, recursive=True)):
@@ -77,8 +82,23 @@ def count_red(patterns: list[str]) -> int:
                 root = ET.parse(path).getroot()
             except ET.ParseError:
                 continue
-            red += sum(1 for case in root.iter("testcase") if {child.tag for child in case} & {"failure", "error"})
+            for case in root.iter("testcase"):
+                if not {child.tag for child in case} & {"failure", "error"}:
+                    continue
+                label = " ".join(filter(None, [case.get("classname"), case.get("name"), case.get("file")]))
+                if names is None or any(name and name in label for name in names):
+                    red += 1
     return red
+
+
+def passed_in_any(groups: list[dict[str, TcResult]]) -> dict[str, TcResult]:
+    """Test cases that passed in at least one of several runs, as one result set."""
+    merged: dict[str, TcResult] = {}
+    for results in groups:
+        for tc_id, result in results.items():
+            if result.ok and tc_id not in merged:
+                merged[tc_id] = result
+    return merged
 
 
 def check(

@@ -50,6 +50,11 @@ Gemfile.lock        @DIRECTOR_LOGIN
 *.lockb             @DIRECTOR_LOGIN
 *.lockfile          @DIRECTOR_LOGIN
 npm-shrinkwrap.json @DIRECTOR_LOGIN
+Package.resolved    @DIRECTOR_LOGIN
+Package.swift       @DIRECTOR_LOGIN
+go.work             @DIRECTOR_LOGIN
+*.sum               @DIRECTOR_LOGIN
+*.resolved          @DIRECTOR_LOGIN
 packages.lock.json  @DIRECTOR_LOGIN
 composer.json       @DIRECTOR_LOGIN
 Pipfile             @DIRECTOR_LOGIN
