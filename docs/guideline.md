@@ -3,7 +3,7 @@
 *繁體中文：[guideline-zh-TW.md](guideline-zh-TW.md). The English version governs if the two differ.*
 
 This document explains the design of this repo: why it is built this way, how the parts fit together, what has been verified and what has not.
-Installation steps are in [runbook.md](runbook.md). Threats and the controls that answer them are in [threat-model.md](threat-model.md).
+Setting up a project is in [new-project.md](new-project.md), setting up a person's computer in [new-machine.md](new-machine.md), and running it in [operations.md](operations.md). Threats and the controls that answer them are in [threat-model.md](threat-model.md).
 
 ## 1. Goals
 
@@ -83,7 +83,7 @@ Why each developer's agents get their own GitHub App: an App has exactly the per
 
 Why the conductor is a separate GitHub App: GitHub does not let an author approve their own PR. If a cloud agent opened a spec PR under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the PR. In addition, PRs opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all.
 
-Cloud sessions are the exception. Claude Code on the web and Codex cloud reach GitHub through the vendor's own integration, acting as the user account you connect; you cannot put your own App in its place. The default here is to connect your personal account. A cloud agent then acts with your identity, and what it cannot do depends on the vendor's limits and on rulesets that have no bypass. Section E of the red-team checklist tests exactly this: whether a cloud agent can create a release tag or approve a pull request. If either succeeds, there are two ways out. Connect a separate machine account for the cloud services, which costs one more seat. Or stop using the cloud path and run every stage on self-hosted runners (`via = "workflow"`), which costs nothing but needs the machine to be on.
+Cloud sessions are the exception. Claude Code on the web and Codex cloud reach GitHub through the vendor's own integration, acting as the user account you connect; you cannot put your own App in its place. The default here is to connect your personal account. A cloud agent then acts with your identity, and what it cannot do depends on the vendor's limits and on rulesets that have no bypass. Section E of [redteam-machine.md](redteam-machine.md) tests exactly this: whether a cloud agent can create a release tag or approve a pull request. If either succeeds, there are two ways out. Connect a separate machine account for the cloud services, which costs one more seat. Or stop using the cloud path and run every stage on self-hosted runners (`via = "workflow"`), which costs nothing but needs the machine to be on.
 
 ## 4. Gates: what must hold before a merge
 
@@ -262,7 +262,7 @@ GitHub measures the allowance in money: $18 a month on the Team plan. A standard
 | Fixed overhead per month | about 750 minutes | about 70 minutes equivalent, lower when the conductor runs locally |
 | Stories supportable per month (T=3 / T=10) | about 10 / 4 | about 50 / 30 |
 
-T is the number of minutes one run of the test suite takes. "Equivalent" means 1-core runner minutes converted by unit price. **These are all estimates and have not yet been measured.** The spike in the runbook asks you to record the actual numbers.
+T is the number of minutes one run of the test suite takes. "Equivalent" means 1-core runner minutes converted by unit price. **These are all estimates and have not yet been measured.** The spike in [new-project.md](new-project.md) asks you to record the actual numbers.
 
 **Overflow to self-hosted.** `agentctl budget` estimates the month's usage from the Actions job records (it runs in both the daily brief and the conductor's scheduled runs). When usage reaches 85% of the allowance, it points the repo variable `CI_RUNNER` at the runner inside the VM on your Mac, and changes it back when a new month begins. The threshold, the unit prices and the allowance are all in `policy/conductor.toml`.
 
@@ -311,11 +311,11 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 - The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving markers, marking a draft ready for review, a single failed action not affecting the others. While the lease is valid the Actions side does not act, and it takes over when the lease expires. When usage reaches the threshold it rewrites `CI_RUNNER`.
 - The workflows pass actionlint, the shell scripts pass shellcheck, and the command-blocking hook has tests.
 
-**Not yet verified, to be done on your accounts and machines (the spike in the runbook and the red-team checklist):**
+**Not yet verified, to be done on your accounts and machines (the spike in new-project.md and the two red-team checklists):**
 
 - The conductor's behaviour against the real GitHub API, in particular the API for issue dependency links and the reading of check status.
 - The actual interface for triggering a Claude cloud scheduled task by API, and whether starting an arbitrary task with an `@codex` comment is feasible and what it requires of the commenter's identity.
-- What a cloud session connected to a personal admin account can do on GitHub (section E of the red-team checklist).
+- What a cloud session connected to a personal admin account can do on GitHub (section E of [redteam-machine.md](redteam-machine.md)).
 - Minting an agent App token against the real API (`agentctl app-token`).
 - The current input parameters of `anthropics/claude-code-action`; the account name of the Codex review bot and its review format.
 - Docker Sandboxes on a real Mac: the `sbx` commands used by `sandbox/sbx.sh`, clone mode, whether the proxy injects the App token into `git push` over HTTPS (the documentation does not spell this out), the home directory path inside the sandbox, and headless runs of each harness.
@@ -337,7 +337,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 - Per-stage privileges exist only on the Docker Sandboxes path. In the Lima fallback every stage shares one VM and one write token. In a cloud session every stage acts as the account you connected.
 - The subscription login state inside the VM could in theory be stolen by malicious repo content. The egress allowlist reduces this risk but does not remove it.
 - In the Lima fallback, egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
-- Cloud sessions act as the personal account you connect. Until section E of the red-team checklist has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test.
+- Cloud sessions act as the personal account you connect. Until section E of [redteam-machine.md](redteam-machine.md) has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test.
 - What you paste into the PO chat or an issue enters the vendor's context and is outside the isolation.
 - There is no hard guarantee that the two language versions of a story mean the same thing. If the Chinese you approved and the English the agents implement differ, only the review agent and you yourself can catch it.
 - Test results are produced by the PR's code and can be forged. See section 4.

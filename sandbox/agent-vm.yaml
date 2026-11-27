@@ -9,7 +9,7 @@
 #   - ONE mount: the project worktree. The host home directory is not mounted.
 #   - outbound traffic limited to sandbox/allowlist.txt by sandbox/egress.sh
 #
-# NOT YET TESTED on a Mac. Run docs/redteam-checklist.md after first setup.
+# NOT YET TESTED on a Mac. Run docs/redteam-machine.md after first setup.
 
 vmType: vz
 arch: aarch64

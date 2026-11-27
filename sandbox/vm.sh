@@ -13,7 +13,7 @@
 # Agents (claude, codex) are installed and logged in INSIDE the VM. They are
 # never started from the host shell.
 #
-# NOT YET TESTED on a Mac. Run docs/redteam-checklist.md after first setup.
+# NOT YET TESTED on a Mac. Run docs/redteam-machine.md after first setup.
 set -euo pipefail
 
 name="${AGENT_VM_NAME:-agent}"

@@ -36,9 +36,11 @@ Agent 只能推 branch。其餘的每一步都由 GitHub 的 ruleset 與檢查�
 | 文件 | 內容 |
 |---|---|
 | [docs/guideline-zh-TW.md](docs/guideline-zh-TW.md) | 設計與理由。先讀這份 |
-| [docs/runbook-zh-TW.md](docs/runbook-zh-TW.md) | 安裝、spike、日常操作 |
+| [docs/new-project-zh-TW.md](docs/new-project-zh-TW.md) | 每個專案做一次：repo、conductor、rulesets、spike |
+| [docs/new-machine-zh-TW.md](docs/new-machine-zh-TW.md) | 每個人、每台電腦做一次：agent 身分、sandbox、雲端帳號 |
+| [docs/operations-zh-TW.md](docs/operations-zh-TW.md) | 日常：conductor 在哪裡跑、自動合併、新增一個人 |
 | [docs/threat-model-zh-TW.md](docs/threat-model-zh-TW.md) | 威脅與對應的控制 |
-| [docs/redteam-checklist-zh-TW.md](docs/redteam-checklist-zh-TW.md) | 驗證防線真的有效的測試清單 |
+| [docs/redteam-project-zh-TW.md](docs/redteam-project-zh-TW.md)、[docs/redteam-machine-zh-TW.md](docs/redteam-machine-zh-TW.md) | 驗證防線真的有效的測試清單，專案一份、每台電腦一份 |
 | [docs/specs/000-example/](docs/specs/000-example/) | 一句需求變成 story 的範例 |
 | [AGENTS.md](AGENTS.md) | 所有 agent 遵守的規則 |
 
@@ -58,8 +60,8 @@ Agent 只能推 branch。其餘的每一步都由 GitHub 的 ruleset 與檢查�
 
 工具層有單元測試並通過；red-green 在真實的 git repo 上端對端驗證過。
 與真實 GitHub API、兩家雲端服務、macOS sandbox 的整合還沒在實機上跑過，
-清單在 [guideline 第 9 節](docs/guideline-zh-TW.md#9-已驗證與未驗證)，驗證步驟在 runbook 的 spike 一節。
-在完成 spike 與 red-team checklist 之前，不要讓它無人看管地運轉。
+清單在 [guideline 第 9 節](docs/guideline-zh-TW.md#9-已驗證與未驗證)，驗證步驟在 [docs/new-project-zh-TW.md](docs/new-project-zh-TW.md) 的 spike 一節。
+在完成 spike 與兩份 red-team checklist 之前，不要讓它無人看管地運轉。
 
 ## 語言
 

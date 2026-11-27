@@ -17,9 +17,12 @@ SUFFIX = "-zh-TW.md"
 REQUIRED = [
     "README.md",
     "docs/guideline.md",
-    "docs/runbook.md",
+    "docs/new-project.md",
+    "docs/new-machine.md",
+    "docs/operations.md",
     "docs/threat-model.md",
-    "docs/redteam-checklist.md",
+    "docs/redteam-project.md",
+    "docs/redteam-machine.md",
     "docs/product/domain.md",
     "sandbox/runner/README.md",
 ]

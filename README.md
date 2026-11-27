@@ -36,9 +36,11 @@ Agents can only push branches. Every other step is guarded by GitHub rulesets an
 | Document | Contents |
 |---|---|
 | [docs/guideline.md](docs/guideline.md) | Design and rationale. Read this first |
-| [docs/runbook.md](docs/runbook.md) | Installation, spike, daily operation |
+| [docs/new-project.md](docs/new-project.md) | Once per project: repo, conductor, rulesets, the spike |
+| [docs/new-machine.md](docs/new-machine.md) | Once per person and computer: agent identity, sandbox, cloud accounts |
+| [docs/operations.md](docs/operations.md) | Day to day: where the conductor runs, auto-merge, adding a person |
 | [docs/threat-model.md](docs/threat-model.md) | Threats and the controls that answer them |
-| [docs/redteam-checklist.md](docs/redteam-checklist.md) | Test checklist that verifies the defences really work |
+| [docs/redteam-project.md](docs/redteam-project.md), [docs/redteam-machine.md](docs/redteam-machine.md) | Checklists that verify the defences really work, for the project and for each computer |
 | [docs/specs/000-example/](docs/specs/000-example/) | An example of one sentence of requirement becoming a story |
 | [AGENTS.md](AGENTS.md) | The rules every agent follows |
 
@@ -58,8 +60,8 @@ Agents can only push branches. Every other step is guarded by GitHub rulesets an
 
 The tooling layer has unit tests and they pass. Red-green has been verified end to end on a real git repo.
 Integration with the real GitHub API, the two cloud services and the macOS sandbox has not yet been run on real machines.
-The list is in [section 9 of the guideline](docs/guideline.md#9-verified-and-not-yet-verified), and the verification steps are in the spike section of the runbook.
-Until the spike and the red-team checklist are complete, do not let it run unattended.
+The list is in [section 9 of the guideline](docs/guideline.md#9-verified-and-not-yet-verified), and the verification steps are in the spike section of [docs/new-project.md](docs/new-project.md).
+Until the spike and both red-team checklists are complete, do not let it run unattended.
 
 ## Languages
 

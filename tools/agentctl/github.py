@@ -6,7 +6,7 @@ no state between runs.
 
 NOTE: this adapter has not been exercised against a live repository yet.
 The pure scheduling logic it feeds (reconcile.plan) is unit-tested; the calls
-here are to be validated in the spike described in docs/runbook.md.
+here are to be validated in the spike described in docs/new-project.md.
 """
 
 from __future__ import annotations

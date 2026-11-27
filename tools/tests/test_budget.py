@@ -97,13 +97,13 @@ class DocsLintTests(unittest.TestCase):
 
     def test_missing_translation_orphan_translation_and_structure_drift(self):
         root = self.make({
-            "docs/runbook-zh-TW.md": None,
+            "docs/operations-zh-TW.md": None,
             "docs/extra-zh-TW.md": "# only zh\n",
             "docs/guideline.md": "# A\n## B\n```\n# not a heading\n```\n## C\n",
             "docs/guideline-zh-TW.md": "# A\n## B\n",
         })
         problems = "\n".join(docs.lint(root))
-        self.assertIn("docs/runbook.md: no runbook-zh-TW.md", problems)
+        self.assertIn("docs/operations.md: no operations-zh-TW.md", problems)
         self.assertIn("docs/extra-zh-TW.md: no English source", problems)
         self.assertIn("different heading structure (3 vs 2 headings)", problems)
 

@@ -28,7 +28,7 @@
 #   ~/.config/agent-app/key.pem     (chmod 600)
 #
 # NOT YET RUN on a real machine. The sbx commands follow the Docker Sandboxes
-# documentation as read in November 2026; run docs/redteam-checklist.md after setup.
+# documentation as read in November 2026; run docs/redteam-machine.md after setup.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

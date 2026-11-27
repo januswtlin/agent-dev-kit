@@ -10,7 +10,7 @@
 # address with an allowed one is reachable too. Docker Sandboxes' proxy filters
 # by hostname and is the stricter option.
 #
-# NOT YET TESTED on a Mac. Run docs/redteam-checklist.md after first setup.
+# NOT YET TESTED on a Mac. Run docs/redteam-machine.md after first setup.
 set -euo pipefail
 
 allowlist="${1:?usage: egress.sh <allowlist.txt> [ollama-port]}"

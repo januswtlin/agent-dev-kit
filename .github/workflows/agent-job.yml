@@ -11,7 +11,7 @@ name: agent-job
 # `agent-sandbox` and their GitHub login, so a story runs on its assignee's
 # machine and subscription. The runner is logged in to Claude Code and Codex, and
 # acts on GitHub as that developer's agent GitHub App (no workflow, admin or
-# status permission); see docs/runbook.md.
+# status permission); see docs/new-machine.md.
 
 on:
   workflow_dispatch:

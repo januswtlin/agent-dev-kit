@@ -66,4 +66,4 @@ MacBook Air 闔上螢幕就會睡眠，睡眠期間 runner 離線，排隊中的
 
 ## 尚未驗證
 
-這份設定還沒在實機上跑過。完成後請執行 `docs/redteam-checklist.md`。
+這份設定還沒在實機上跑過。完成後請執行 `docs/redteam-machine-zh-TW.md`。

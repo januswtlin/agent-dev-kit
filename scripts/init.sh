@@ -31,4 +31,4 @@ rm -f "$root/.github/CODEOWNERS.bak" "$root/policy/roles.toml.bak"
 
 echo "director: $director"
 echo "humans:   $*"
-echo "Next: review policy/roles.toml (which harness does which stage for each person), then docs/runbook.md."
+echo "Next: review policy/roles.toml (which harness does which stage for each person), then docs/new-project.md."

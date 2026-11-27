@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   brief:
-    # Skipped until the conductor GitHub App is configured (docs/runbook.md, section 2.2).
+    # Skipped until the conductor GitHub App is configured (docs/new-project.md, section 3).
     if: vars.CONDUCTOR_APP_ID != ''
     runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10

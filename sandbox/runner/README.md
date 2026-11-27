@@ -70,4 +70,4 @@ and queued work waits until it wakes. That is why the cloud is the main path.
 ## Not yet verified
 
 This setup has not been run on a real machine yet. When it is in place, run
-`docs/redteam-checklist.md`.
+`docs/redteam-machine.md`.

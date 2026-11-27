@@ -3,7 +3,7 @@
 *English: [guideline.md](guideline.md)。兩份內容不一致時以英文版為準。*
 
 這份文件說明這個 repo 的設計：為什麼這樣做、各部分如何配合、哪些已驗證、哪些還沒有。
-安裝步驟在 [runbook.md](runbook.md)，威脅與對應的控制在 [threat-model.md](threat-model.md)。
+建立專案的步驟在 [new-project-zh-TW.md](new-project-zh-TW.md)，設定個人電腦在 [new-machine-zh-TW.md](new-machine-zh-TW.md)，日常運作在 [operations-zh-TW.md](operations-zh-TW.md)。威脅與對應的控制在 [threat-model-zh-TW.md](threat-model-zh-TW.md)。
 
 ## 1. 目標
 
@@ -83,7 +83,7 @@ Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的�
 
 為什麼 conductor 是另一個 GitHub App：GitHub 不允許作者核准自己的 PR。若雲端 agent 以你的身分開 spec PR，你就無法核准它。所以 agent 只推 branch，由 Conductor App 開 PR。另外，用預設的 `GITHUB_TOKEN` 開的 PR 與做的 merge 不會觸發其他 workflow，gate 根本不會跑。
 
-雲端 session 是例外。Claude Code on the web 與 Codex cloud 透過廠商自己的整合存取 GitHub，以你連結的使用者帳號操作，沒有地方可以換成你自己的 App。這裡的預設是連結你的個人帳號。雲端 agent 因此帶著你的身分，它做不到什麼取決於廠商的限制，以及沒有 bypass 的 ruleset。Red-team checklist 的 E 節測的就是這件事：雲端 agent 能否建立 release tag、能否核准 PR。任一項成功時有兩條路：為雲端服務另外連結一個 machine account，代價是多一個座位；或者不走雲端，所有 stage 都改在 self-hosted runner 上執行（`via = "workflow"`），不花錢但機器必須開著。
+雲端 session 是例外。Claude Code on the web 與 Codex cloud 透過廠商自己的整合存取 GitHub，以你連結的使用者帳號操作，沒有地方可以換成你自己的 App。這裡的預設是連結你的個人帳號。雲端 agent 因此帶著你的身分，它做不到什麼取決於廠商的限制，以及沒有 bypass 的 ruleset。[redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) 的 E 節測的就是這件事：雲端 agent 能否建立 release tag、能否核准 PR。任一項成功時有兩條路：為雲端服務另外連結一個 machine account，代價是多一個座位；或者不走雲端，所有 stage 都改在 self-hosted runner 上執行（`via = "workflow"`），不花錢但機器必須開著。
 
 ## 4. Gate：merge 之前必須成立的事
 
@@ -262,7 +262,7 @@ GitHub 以金額計算額度，Team 方案每月 $18。標準 Linux runner 每�
 | 每月固定開銷 | 約 750 分鐘 | 約 70 分鐘等值，本機執行 conductor 時更低 |
 | 每月可支撐的 story（T=3 / T=10） | 約 10 / 4 | 約 50 / 30 |
 
-T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分鐘按單價折算。**這些都是估算，還沒有實測。** Runbook 的 spike 會要你記下實際數字。
+T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分鐘按單價折算。**這些都是估算，還沒有實測。** [new-project-zh-TW.md](new-project-zh-TW.md) 的 spike 會要你記下實際數字。
 
 **overflow 到 self-hosted。** `agentctl budget` 從 Actions 的 job 紀錄估算當月用量（每日的 brief 與 conductor 的排程執行都會跑）。達到額度的 85% 時，它把 repo variable `CI_RUNNER` 改指向你 Mac 上 VM 內的 runner，新的月份開始時改回來。門檻、單價、額度都在 `policy/conductor.toml`。
 
@@ -311,11 +311,11 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、留 marker、把 draft 轉為可審、單一動作失敗不影響其他動作；lease 有效時 Actions 端不動作、過期時接手；用量達門檻時改寫 `CI_RUNNER`。
 - Workflow 通過 actionlint，shell script 通過 shellcheck，指令攔截 hook 有測試。
 
-**尚未驗證，需要在你的帳號與機器上做（runbook 的 spike 與 red-team checklist）：**
+**尚未驗證，需要在你的帳號與機器上做（new-project 的 spike 與兩份 red-team checklist）：**
 
 - Conductor 對真實 GitHub API 的行為，特別是 issue 相依關聯的 API 與 check 狀態的讀取。
 - 以 API 觸發 Claude 雲端 scheduled task 的實際介面，以及以 `@codex` 留言啟動任意任務是否可行、對留言者身分有何要求。
-- 連結個人 admin 帳號的雲端 session 在 GitHub 上實際能做到什麼（red-team checklist 的 E 節）。
+- 連結個人 admin 帳號的雲端 session 在 GitHub 上實際能做到什麼（[redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) 的 E 節）。
 - 對真實 API 產生 agent App 的 token（`agentctl app-token`）。
 - `anthropics/claude-code-action` 目前的輸入參數；Codex review bot 的帳號名稱與 review 格式。
 - 實機上的 Docker Sandboxes：`sandbox/sbx.sh` 用到的 `sbx` 指令、clone 模式、proxy 是否會把 App token 注入走 HTTPS 的 `git push`（文件沒有明講）、sandbox 內 home 目錄的路徑、各 harness 的無人值守執行方式。
@@ -337,7 +337,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - 依 stage 區分的權限只存在於 Docker Sandboxes 這條路徑。Lima 備援中所有 stage 共用一個 VM 與一個可寫入的 token；雲端 session 中每個 stage 都以你連結的帳號操作。
 - VM 內的訂閱登入狀態理論上可被惡意的 repo 內容竊取。Egress allowlist 降低但不消除這個風險。
 - 在 Lima 備援中，egress 規則以位址過濾，與允許的主機共用位址的其他主機也連得到。
-- 雲端 session 以你連結的個人帳號操作。在跑過 red-team checklist 的 E 節之前，應假設雲端 agent 在 GitHub 上能做到該帳號能做的一切，只受沒有 bypass 的 ruleset 限制。Release tag 的 ruleset 允許 admin bypass，所以它是必測項目之一。
+- 雲端 session 以你連結的個人帳號操作。在跑過 [redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) 的 E 節之前，應假設雲端 agent 在 GitHub 上能做到該帳號能做的一切，只受沒有 bypass 的 ruleset 限制。Release tag 的 ruleset 允許 admin bypass，所以它是必測項目之一。
 - 你貼進 PO chat 或 issue 的內容會進入廠商的 context，不在隔離範圍內。
 - 雙語 story 的語意一致性沒有硬性保證。你核准的中文與 agent 實作的英文若有出入，只有 review agent 與你自己能發現。
 - 測試結果由 PR 的程式碼產生，可以被偽造。見第 4 節。
