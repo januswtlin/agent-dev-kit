@@ -142,7 +142,7 @@ To proceed without the check: AGENT_SKIP_NETWORK_PROBE=1"
   result="$(probe "$1" https://github.com/)"
   case "$result" in
     "HTTP 2"??|"HTTP 3"??) ;;
-    *) cannot_check "$1" "github.com, which is on the allowlist, did not answer from inside it (${result:-sbx exec failed})"; return 0 ;;
+    *) cannot_check "$1" "github.com, which is on the allowlist, did not answer from inside it (${result:-sbx exec failed})" ;;
   esac
   for url in https://example.com/ $([ "$2" = "build" ] || echo https://registry.npmjs.org/); do
     result="$(probe "$1" "$url")"
@@ -150,7 +150,7 @@ To proceed without the check: AGENT_SKIP_NETWORK_PROBE=1"
       NONE|"HTTP 4"??|"HTTP 5"??) ;;
       "HTTP 2"??|"HTTP 3"??) die "sandbox $1 can reach $url, which no rule of this project allows for it.
 The sbx network preset is not deny-all, or a machine-wide rule allows it. See docs/new-machine.md, section 4." ;;
-      *) cannot_check "$1" "${result:-sbx exec failed}"; return 0 ;;
+      *) cannot_check "$1" "${result:-sbx exec failed}" ;;
     esac
   done
 }

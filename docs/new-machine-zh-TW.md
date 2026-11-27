@@ -35,9 +35,10 @@ gh variable get --help
 每位開發者為自己的 agent 建立一個 GitHub App，這樣 commit 與留言就看得出是誰的 agent 做的。在你個人帳號的 Settings > Developer settings > GitHub Apps：
 
 - 以自己命名，例如 `yourname-agent`。
+- 在「Where can this GitHub App be installed?」底下，如果專案的 repo 屬於某個 organization（通常是這樣），選 **Any account**。限制為「Only on this account」的 App 只能安裝在你的個人帳號上，無法安裝到 organization 的 repo。另一個做法是在 organization 底下建立這個 App（它的 Settings > Developer settings > GitHub Apps）；這需要你是 organization owner，或已被設為 App manager。
 - Repository permissions：Contents: Read and write；Pull requests: Read and write；Issues: Read and write；Metadata: Read。其他都不要，尤其**不要** Workflows、Administration、Commit statuses、Secrets、Variables。
 - 不訂閱任何 webhook，取消勾選 Active。
-- 建立後產生一把 private key，並把 App 只安裝到這個 repo。
+- 建立後產生一把 private key，並把 App 只安裝到這個 repo：在 App 的頁面選 Install App，挑選那個 organization，然後選「Only select repositories」與這個 repo。安裝到 organization 的 repo 需要 organization owner；如果你不是，GitHub 會送出一個請求給他們核准（**待驗證**）。
 
 這份清單是 App 最多能做的事。沒有任何一個 sandbox 會拿到全部。Mac 上的 helper 為每個 sandbox 簽發一個一小時的 token，權限只是 App 權限的一部分。每個 stage 拿到哪一部分，固定寫在 `tools/agentctl/profiles.py`：
 
@@ -59,7 +60,7 @@ gh variable get --help
 | 類型 | 名稱 | 來源 | 何時需要 |
 |---|---|---|---|
 | Environment secret | `DISPATCH_TOKEN` | 第 2 節 | Codex 以留言啟動時 |
-| Environment secret | `CLAUDE_CODE_OAUTH_TOKEN` | 在你的機器上執行 `claude setup-token` | Claude review |
+| Environment secret | `CLAUDE_CODE_OAUTH_TOKEN` | 在你的機器上執行 `claude setup-token`。這需要 Claude Code 安裝在 Mac 本身，並登入你的訂閱；依其文件安裝（code.claude.com/docs）。它在這裡只用來產生這個 token，絕不用來在 host 上執行 agent | Claude review |
 | Environment secret | `CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN` | 第 5 節建立的 scheduled task | Claude 雲端 session |
 
 Claude review 只需要你建立 `CLAUDE_CODE_OAUTH_TOKEN` 這一個憑證。在 GitHub 上，review job 用的是 Actions 發給該 job 的 token。
@@ -97,7 +98,7 @@ mv ~/Downloads/YOUR_APP.private-key.pem ~/.config/agent-app/key.pem && chmod 600
 
 **只從 default branch 的乾淨 checkout 執行它。** 絕對不要在你切出來的 agent branch 上執行。這支 script 在 Mac 上以你的權限執行。如果目前切在 agent 的 branch 上，你執行的那份 script 就是 agent 寫的。為了防止這種意外，`setup`、`up`、`job` 在 `sandbox/`、`tools/`、`bin/` 或 `policy/` 與 default branch（以你的 clone 上次 fetch 到的為準）不同時會拒絕執行；`sandbox/`、`tools/`、`bin/` 內有未追蹤的檔案時也一樣。`bin/agentctl conductor here` 有相同的檢查。這項檢查本身就是那些 script 的一部分，所以它保護不了一個已經被動過手腳的 checkout。這條規則要靠你自己遵守：留一個永遠停在 default branch 的 checkout，host 上的指令只從那裡執行。`AGENT_ALLOW_MODIFIED_SCRIPTS=1` 會關掉這項檢查，它是給開發這些 script 本身時用的。
 
-**專案目錄內不可以放任何機密，被 git 忽略的檔案也算。** Clone 模式會把整個目錄以唯讀方式掛進每個 sandbox，位置是 `/run/sandbox/source`。這包含 git 忽略的檔案，例如 `.env` 檔，也包含 git 單純沒有追蹤的檔案。只要找到檔名像機密的未追蹤檔案，不論是否被忽略，script 就拒絕設定機器、建立 sandbox 或重新接上既有的 sandbox。這些檔名是：`.env*`、`*.pem`、`*.key`、`*.p12`、`*.pfx`、`id_rsa*`、`id_ed25519*`、`id_ecdsa*`、`credentials*`、`.netrc`、`.npmrc`、`.pypirc`，以及任何含有 `secret` 的名稱，不分大小寫。它會列出這些檔案然後停止。請把它們移出 repo。這項檢查只看檔名，換個名字的機密就找不到，不要依賴它。`AGENT_ALLOW_FILES_IN_TREE=1` 可以讓 script 照樣繼續。本機 conductor 自己的憑證也因為這個原因放在 repo 之外：`~/.config/agent-dev/OWNER-REPO/conductor.env`（[operations-zh-TW.md](operations-zh-TW.md) 第 1 節）。
+**專案目錄內不可以放任何機密，被 git 忽略的檔案也算。** Clone 模式會把整個目錄以唯讀方式掛進每個 sandbox，位置是 `/run/sandbox/source`。這包含 git 忽略的檔案，例如 `.env` 檔，也包含 git 單純沒有追蹤的檔案。只要找到檔名像機密的未追蹤檔案，不論是否被忽略，script 就拒絕設定機器、建立 sandbox 或重新接上既有的 sandbox。這些檔名是：`.env*`、`*.pem`、`*.key`、`*.p12`、`*.pfx`、`id_rsa*`、`id_ed25519*`、`id_ecdsa*`、`credentials*`、`.netrc`、`.npmrc`、`.pypirc`，以及任何含有 `secret` 的名稱，不分大小寫。檔名是照 git 儲存的樣子、以 NUL 分隔讀取的，所以位在含有非 ASCII 字元路徑底下的檔案也找得到。它會列出這些檔案然後停止。請把它們移出 repo。這項檢查只看檔名，換個名字的機密就找不到，不要依賴它。`AGENT_ALLOW_FILES_IN_TREE=1` 可以讓 script 照樣繼續。本機 conductor 自己的憑證也因為這個原因放在 repo 之外：`~/.config/agent-dev/OWNER-REPO/conductor.env`（[operations-zh-TW.md](operations-zh-TW.md) 第 1 節）。
 
 接著：
 
@@ -123,7 +124,7 @@ AGENT_RESET_POLICY=1 sandbox/sbx.sh setup
 
 Setup 設好 deny-all 之後會留下一個標記（`~/.local/state/agent-dev/sbx-deny-all`），之後單純執行 `sandbox/sbx.sh setup` 時會跳過第 2 步。所以更新固定版本的工具不需要 reset。只有在你想清掉規則、重新開始時，才再用 `AGENT_RESET_POLICY=1`。
 
-這個標記只記錄 setup 曾經做過什麼。它無法知道 preset 之後是否被你或別的工具改過。所以 script 不依賴它。**每次建立 sandbox，以及每次重新接上 sandbox 時，script 都會從 sandbox 內部詢問它連得到什麼**：`https://example.com/` 對每個 sandbox 都必須被拒絕，`https://registry.npmjs.org/` 對每個不做建置的 stage 都必須被拒絕。只要其中一個連得到，script 就會停止並告訴你；常見的原因是 preset 不是 deny-all，或有一條比這個專案的清單更寬的整台機器規則，修正方式就是上面的 reset。這項探測使用 sandbox 內的 `curl`。如果 sandbox image 沒有 `curl`，script 無法檢查，就會拒絕執行；`AGENT_SKIP_NETWORK_PROBE=1` 可以不做檢查就繼續。**待驗證**：sandbox image 內含 `curl`，而且被 sbx proxy 拒絕的請求會以探測所預期的方式失敗（`curl -f` 以非零狀態結束）。
+這個標記只記錄 setup 曾經做過什麼。它無法知道 preset 之後是否被你或別的工具改過。所以 script 不依賴它。**每次建立 sandbox，以及每次重新接上 sandbox 時，script 都會從 sandbox 內部詢問它連得到什麼**，方式是用 `curl` 發出最多三個請求。首先是 allowlist 上的 `https://github.com/`，它必須回應 2xx 或 3xx 的狀態。如果沒有，script 分不出「被拒絕」與「沒有網路」，就以「cannot check」停止。接著是每個 sandbox 都要測的 `https://example.com/`，以及不做建置的 stage 要測的 `https://registry.npmjs.org/`。回應 2xx 或 3xx 代表這個主機連得到：script 會停止並告訴你。常見的原因是 preset 不是 deny-all，或有一條比這個專案的清單更寬的整台機器規則，修正方式就是上面的 reset。完全沒有回應，或回應 4xx 或 5xx，都算被拒絕：這些 URL 真的連到時會回應 200，所以錯誤狀態被視為 proxy 代替那個主機回應。Sandbox image 沒有 `curl`，或 `sbx exec` 失敗，同樣是「cannot check」。`AGENT_SKIP_NETWORK_PROBE=1` 可以越過「cannot check」繼續；它不能略過一個已經被發現連得到的主機。用了這個略過之後，剩下的請求仍然會發出，被發現連得到的主機仍然會讓 script 停下；被略過的只有那個無法判定的請求。這是對三個主機的抽查。它不能證明 sandbox 連得到的範圍等於這個專案的清單。**待驗證**（在實機上）：sandbox image 內含 `curl`；被 sbx proxy 拒絕的請求從裡面看起來實際是什麼樣子（沒有回應，或是哪個狀態）；以及 `github.com` 連得到。
 
 固定版本的工具放在 `~/.local/share/agent-dev/OWNER-REPO/`（有設定 `$XDG_DATA_HOME` 時在它底下），其中 `OWNER-REPO` 取自 origin remote。不同 repo 的兩個 clone 不會共用它；這個目錄記錄了它屬於哪個 repo，如果另一個 repo 的名稱對應到同一個目錄，script 會停止。裡面有一份 `tools/agentctl` 與 `tools/run.py`，內容取自 origin 上的 default branch，不是你的 working tree；另外有兩個 helper：`github-token-write` 與 `github-token-read`。Sandbox 需要 GitHub token 時，host 上的 sbx proxy 會執行其中一個。這個目錄裡的東西一律以 `python3 -I` 啟動，所以目前目錄中的檔案無法冒充它。拉下工具的更新之後，要再執行一次 `sandbox/sbx.sh setup` 來更新這份固定的副本。
 
@@ -161,9 +162,9 @@ sandbox/sbx.sh check claude review
 sandbox/sbx.sh rm claude review
 ```
 
-對同一個 harness 與 stage 再執行一次 `up`，會重新接上那個 sandbox，接上之前先做新 sandbox 也要經過的那兩項檢查：專案目錄內沒有檔名像機密的檔案，以及網路探測。它保有建立時拿到的 token 與規則，並一直留著，直到你用 `rm` 移除。需要建置的 stage（design、tests、impl 與各個 fix stage）另外會拿到 `sandbox/allowlist-build.txt` 所列的主機，只對該 sandbox 生效。
+對同一個 harness 與 stage 再執行一次 `up`，會重新接上那個 sandbox，接上之前先做新 sandbox 也要經過的那些檢查：固定版本工具所在的目錄屬於這個 repo、專案目錄內沒有檔名像機密的檔案，以及網路探測通過。它保有建立時拿到的 token 與規則，並一直留著，直到你用 `rm` 移除。需要建置的 stage（design、tests、impl 與各個 fix stage）另外會拿到 `sandbox/allowlist-build.txt` 所列的主機，只對該 sandbox 生效。
 
-無人看管的 job 不一樣。本機 conductor 以 `sandbox/sbx.sh job` 啟動每一個 job，使用的是它自己的 default branch checkout。每個 job 都拿到一個全新的 sandbox，名稱不會重複（`ag-TAG-STORY-STAGE-HARNESS-TIMESTAMP`）；job 結束後不論結果如何，sandbox 都會被移除。如果同名的 sandbox 已經存在，job 會拒絕執行。Log 留在 Mac 上的 `~/.local/state/agent-dev/OWNER-REPO/`。本機 sandbox 只會在 story 所屬開發者的 Mac 上啟動，也就是 `conductor.env` 裡 `DEVELOPER` 那一行所指的人。
+無人看管的 job 不一樣。本機 conductor 以 `sandbox/sbx.sh job` 啟動每一個 job，使用的是它自己的 default branch checkout。每個 job 都拿到一個全新的 sandbox，名稱在每次啟動時都不同：`ag-TAG-STORY-STAGE-HARNESS-STAMP`，其中 `STAMP` 是 10 個十六進位字元，由時間加上一個隨機 byte 組成。如果同名的 sandbox 已經存在，job 會拒絕執行，而且不會移除那個既有的 sandbox。Job 自己的 sandbox 不論 job 怎麼結束都會被移除，包含被中斷的情況。Log 留在 Mac 上的 `~/.local/state/agent-dev/OWNER-REPO/`。本機 sandbox 只會在 story 所屬開發者的 Mac 上啟動，也就是 `conductor.env` 裡 `DEVELOPER` 那一行所指的人。
 
 Agent 在自己的 clone 上工作，以 push 交付成果。想在它 push 之前看它的工作，可以從 sbx 加到你 repo 的 remote 取得。先列出 remote 找到它的名稱；它應該是 `sandbox-` 後面接著 `up` 印出的 sandbox 名稱（**待驗證**）：
 

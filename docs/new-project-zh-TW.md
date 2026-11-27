@@ -61,10 +61,22 @@ cd REPO && gh repo create OWNER/REPO --private && git remote set-url origin http
 git branch -M main && git push -u origin main
 ```
 
+   這個 clone 仍然把 template 的 default branch 記成這個 repo 的 default branch。Host 上的 script 會拿你的 checkout 與 default branch 比較，所以現在就修正這筆紀錄，否則之後 `sandbox/sbx.sh setup` 會拒絕一個乾淨的 checkout：
+
+```bash
+git remote set-head origin -a
+```
+
 不論是哪一種，都進入 clone 下來的目錄，並確認它是 template 而不是空的 repo。之後的每個指令都在這裡執行：
 
 ```bash
 cd ~/dev/REPO && ls AGENTS.md policy/roles.toml sandbox/sbx.sh
+```
+
+確認這個 clone 把 `main` 認作 default branch。這必須印出 `origin/main`；如果印出別的東西或錯誤，就執行 `git remote set-head origin -a` 再試一次：
+
+```bash
+git symbolic-ref --short refs/remotes/origin/HEAD
 ```
 
 填入專案裡有誰。第一個帳號是 director，負責核准產品決定；列出的每個帳號都可以核准 T2 變更。只有一個人也可以：
@@ -109,7 +121,7 @@ Conductor 會開啟並合併 pull request、在 issue 上留言與加 label、�
 - 不訂閱任何 webhook，取消勾選 Active。
 - 建立後產生一把 private key，並把 App 安裝到這個 repo。記下 App 的數字 ID。下載的 key 檔要放在專案目錄之外：sandbox 讀得到該目錄裡的每個檔案，包含被 git 忽略的檔案。
 
-接著建立存放 pipeline secret 的 GitHub environment。請在設定 `CONDUCTOR_APP_ID` 之前做：這個 variable 是空的時候，conductor 的 job 會被跳過，而它不應該在 environment 受到限制之前執行。
+接著建立存放 pipeline secret 的 GitHub environment。Repository variable `CONDUCTOR_APP_ID` 是啟動 conductor 的開關：這個 variable 是空的時候，conductor 的 job 會被跳過。你要在第 5 節的最後才設定它，也就是 environment 已經受到限制、ruleset 也已經就位之後，不是現在。
 
 1. 在 repo 的 Settings > Environments，建立一個名稱正好是 `conductor` 的 environment。
 2. 在 Deployment branches and tags 選 Selected branches and tags，加入一條只允許 default branch（`main`）的規則。
@@ -121,18 +133,12 @@ gh secret set CONDUCTOR_APP_PRIVATE_KEY --env conductor < PATH_TO_PRIVATE_KEY.pe
 
 為什麼用 environment 而不是 repository secret：持有憑證的 job（`conductor.yml` 的 `reconcile`、`brief.yml` 的 `brief`、`agent-review.yml` 的 `claude`）都宣告了 `environment: conductor`。從其他任何 ref 啟動的執行，包含手動 dispatch 某個 branch，GitHub 本身就會拒絕給它 secret。Repository secret 沒有這種規則。**待驗證**：Team 方案的 private repo 是否能使用帶有 deployment branch 規則的 environment、這些設定的確切名稱，以及若 workflow 先提到這個 environment，GitHub 不會自動建立一個沒有 branch 規則的 environment。
 
-最後，在 repo 的 Settings > Secrets and variables > Actions > Variables 新增 repository variable，或執行：
+把 App 的數字 ID 留在手邊。第 5 節會用到它兩次：一次給 ruleset，一次用來啟動 conductor。
 
-```bash
-gh variable set CONDUCTOR_APP_ID --body APP_ID
-```
-
-從這一刻起，conductor 在 GitHub Actions 上執行。它還沒有任何東西可以派發：template 的 sprint 檔（`docs/sprints/000.toml`）沒有列出任何 story。不過，任何 push 到 `story/`、`spec/`、`sprint/` 或 `chore/` 底下的 branch，它都會為之開啟 pull request。在第 5 節完成、而且有一個人做完 [new-machine-zh-TW.md](new-machine-zh-TW.md) 之前，不要合併列有 story 的 sprint 檔。
-
-| 類型 | 名稱 | 位置 | 值 |
-|---|---|---|---|
-| Environment secret | `CONDUCTOR_APP_PRIVATE_KEY` | Environment `conductor` | private key 的完整內容 |
-| Repository variable | `CONDUCTOR_APP_ID` | Settings > Secrets and variables > Actions > Variables | App 的數字 ID |
+| 類型 | 名稱 | 位置 | 值 | 何時 |
+|---|---|---|---|---|
+| Environment secret | `CONDUCTOR_APP_PRIVATE_KEY` | Environment `conductor` | private key 的完整內容 | 現在 |
+| Repository variable | `CONDUCTOR_APP_ID` | Settings > Secrets and variables > Actions > Variables | App 的數字 ID | 第 5 節的最後 |
 
 ### 人類
 
@@ -178,7 +184,15 @@ CONDUCTOR_APP_ID=APP_ID scripts/apply-rulesets.sh
 gh api repos/OWNER/REPO/rulesets --jq '.[].name'
 ```
 
-應列出 `main`、`main-merge` 與 `release-tags`。**待驗證**：`.github/rulesets/*.json` 的欄位是否被目前的 API 接受；`main` 與 `main-merge` 是否如上所述疊加（`main-merge` 的 bypass 不會削弱 `main`）；App 的 ID 是否就是 Integration bypass 該用的 `actor_id`；以及 `main.json` 裡的 `integration_id: 15368` 是否就是產生 required check 的 GitHub Actions app。若 API 回報未知欄位，依錯誤訊息調整後回寫。
+現在保護措施都已就位，可以啟動 conductor 了。在 repo 的 Settings > Secrets and variables > Actions > Variables 新增 repository variable `CONDUCTOR_APP_ID`，或執行：
+
+```bash
+gh variable set CONDUCTOR_APP_ID --body APP_ID
+```
+
+從這一刻起，conductor 在 GitHub Actions 上執行。還不會有任何 story 被派發：template 的 sprint 檔（`docs/sprints/000.toml`）沒有列出任何 story。但從現在起有兩件事會發生。任何 push 到 `story/`、`spec/`、`sprint/` 或 `chore/` 底下的 branch，它都會為之開啟 pull request。另外，如果 `main` 上的 `docs/product/roadmap.md` 有未勾選的項目，它會派發 product owner 為它們起草 spec；template 的 roadmap 沒有這種項目，所以在有一個人做完 [new-machine-zh-TW.md](new-machine-zh-TW.md) 之前，請維持這樣。在那之前也不要合併列有 story 的 sprint 檔。
+
+上面的 ruleset 清單應列出 `main`、`main-merge` 與 `release-tags`。**待驗證**：`.github/rulesets/*.json` 的欄位是否被目前的 API 接受；`main` 與 `main-merge` 是否如上所述疊加（`main-merge` 的 bypass 不會削弱 `main`）；App 的 ID 是否就是 Integration bypass 該用的 `actor_id`；以及 `main.json` 裡的 `integration_id: 15368` 是否就是產生 required check 的 GitHub Actions app。若 API 回報未知欄位，依錯誤訊息調整後回寫。
 
 ## 6. 設定第一個人
 
@@ -206,7 +220,7 @@ cp docs/sprints/_template.toml docs/sprints/001.toml
 
    填好三個 spec 檔（一個 AC、兩個 TC 的小功能）與 sprint 檔（`stories = ["001"]`）。至於 `assignee`，若第 6 節那個人的 secret 是用不帶後綴的名稱存的（`DISPATCH_TOKEN`），就保留 `default`。只有在他的 secret 帶有後綴（`DISPATCH_TOKEN_ALICE`）時，才把它設為他的帳號：交給指名的人的 story 使用那個人帶後綴的 secret，絕不會退回去用不帶後綴的。
 
-   這個玩具功能請用 Python 寫。依 template 原本附帶的設定，`make test` 會對 `tests/` 目錄執行 Python 的 `unittest`，並寫出 gate 所讀取的結果檔，所以 spike 不需要其他的 test runner。測試把它的 TC id 放在名稱裡，例如 `test_tc_001_01_says_hello`。要使用別的技術組合，先在 `chore/` branch 上修改 `Makefile` 的 `project-*` target 並合併，讓 runner 在 story 開始之前就已經在 `main` 上；red-green 會在 `main` 上執行這個 story 的測試。
+   這個玩具功能請用 Python 寫。依 template 原本附帶的設定，`make test` 會對 `tests/` 目錄執行 Python 的 `unittest`，並寫出 gate 所讀取的結果檔，所以 spike 不需要其他的 test runner。測試把它的 TC id 放在名稱裡，例如 `test_tc_001_01_says_hello`。標成 `expectedFailure` 而斷言失敗的測試會被回報為 skipped，所以它絕不會被算成通過的 test case。要使用別的技術組合，先在 `chore/` branch 上修改 `Makefile` 的 `project-*` target 並合併，讓 runner 在 story 開始之前就已經在 `main` 上；red-green 會在 `main` 上執行這個 story 的測試。
 
    然後檢查、commit 並 push：
 
@@ -254,7 +268,7 @@ gh workflow run conductor.yml -f dry_run=true
 gh workflow run conductor.yml
 ```
 
-8. Conductor 派發 `design`。Agent push `story/001-hello`，`notify` 執行，conductor 以 draft 開啟 pull request。Draft 只跑 lint 與 `risk-gate`。
+8. Conductor 派發 `design`。Agent push `story/001-hello`，`notify` 執行，conductor 以 draft 開啟 pull request。在 draft 上，`ci` 只跑 lint，`risk-gate` 會執行，`security` 與 `spec-verify` 則被跳過。GitHub 把被跳過的 check 顯示為通過；這之所以可以接受，只因為 draft 無法合併，而且把它轉為可審會在同一個 commit 上啟動一次完整的執行。
 9. 依序出現 `done:design`、`done:tests`、`done:impl`。`done:impl` 之後 conductor 把 pull request 轉為可審，完整的 gate 第一次執行。
 10. `agent-review` 針對 head commit 被派發，並把 status 寫在它上面。沒有完成的 review 會被發布為 failure，絕不會留成通過。如果 branch 在 review 等待開始的期間有了變動，那次執行會不產生結論就停止，conductor 會要求對新的 commit 做 review。
 11. 五個 check 全綠，而且 head commit 上還帶有一個名為 `risk-tier/T1`（或 `T0`）的 status：conductor 依據的是這個 status，不是 `tier:` label。Shadow mode 下 conductor 通知你這個 pull request 可以合併；你按 merge。
@@ -282,6 +296,8 @@ Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡
 ## 8. Red-team
 
 執行 [redteam-project-zh-TW.md](redteam-project-zh-TW.md) 的全部項目。有任何一項沒有得到預期結果，就先修。
+
+其中 F 節有幾項會用到本機 conductor（`bin/agentctl conductor here`）。開始之前先把它設定好：它需要 Conductor App 的 private key 放在你的 Mac 上，以及設定檔 `conductor.env`，兩者的說明都在 [operations-zh-TW.md](operations-zh-TW.md) 第 1 節的開頭。
 
 ## 9. 第一個真正的 sprint
 

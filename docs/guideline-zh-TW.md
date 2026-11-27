@@ -38,11 +38,11 @@ Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設
 本機 sandbox 用的是 Docker Sandboxes（`sandbox/sbx.sh`）。六個性質。背後用到的 `sbx` 指令依 Docker Sandboxes 的文件撰寫，還沒在實機上跑過（**待驗證**；見第 9 節）。
 
 - 每個 agent 一個 microVM，有自己的 kernel。
-- **Clone 模式。** Repo 以唯讀方式掛進去，agent 在 VM 內自己的 clone 上工作。它做的任何事都改不到 Mac 上的檔案，交付成果的唯一途徑是 `git push`。這比看起來重要：若是一般的可讀寫掛載，agent 可以在 `.git/hooks` 寫入一個 git hook，等你下次在那個目錄使用 git 時，hook 就會在 Mac 上以你的身分執行。掛進去的是整個 repo 目錄，包含未追蹤的檔案與 git 忽略的檔案。所以專案目錄裡不能放任何 secret。`sbx.sh` 只要找到檔名看起來像 secret 的未追蹤檔案，不論 git 是否忽略它（`.env*`、`*.pem`、`*.key`、`*.pfx`、`.netrc`、`.npmrc` 與類似的檔名，比對時不分大小寫），就拒絕啟動 sandbox，也拒絕重新接上互動式的 sandbox；`AGENT_ALLOW_FILES_IN_TREE=1` 可以略過這項檢查。這項檢查只看檔名，所以它是提醒，不是保證。
-- 對外連線除了 allowlist 所列的主機之外一律拒絕，以主機名稱過濾。`setup` 要求 sbx 使用 deny-all 的網路 preset（`sbx policy init deny-all`），再加上 `sandbox/allowlist.txt` 所列的主機。`sandbox/allowlist-build.txt` 裡的套件 registry 是逐個 sandbox 加入的，只給需要建置的 stage。如果機器上已經有 preset（Docker 的「balanced」preset 允許套件管理工具），`setup` 會停下來，要求你加上 `AGENT_RESET_POLICY=1` 重跑。那會先執行 `sbx policy reset --force`，移除這台機器上所有既有的 sbx 網路規則。`setup` 設定過 deny-all 之後會在 host 上記下這件事，所以之後為了更新固定的工具副本而重跑 `setup` 時不需要 reset。這份紀錄只是為了方便。Preset 是整台機器共用的，可以在這支腳本之外被改掉，而已經存在的 sandbox 會保留它當初拿到的設定。所以 `sbx.sh` 每次建立 sandbox，以及 `up` 每次重新接上互動式的 sandbox 時，都會從 sandbox 內用 `curl` 探測：`https://example.com/`，不需要建置的 stage 另外再探測 `https://registry.npmjs.org/`。任何一個連得上，腳本就拒絕繼續。互動式的 sandbox 會留在原處供你檢查；無人值守 job 的 sandbox 則會被移除，因為沒有人在場檢查它。如果完全無法探測（sandbox 內沒有 `curl`，或 `sbx exec` 失敗），它同樣拒絕，除非設定了 `AGENT_SKIP_NETWORK_PROBE=1`。探測檢查的是當下這兩個主機，不是持續性的檢查。（**待驗證**：在真實 sandbox 內的探測。）Allowlist 同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
+- **Clone 模式。** Repo 以唯讀方式掛進去，agent 在 VM 內自己的 clone 上工作。它做的任何事都改不到 Mac 上的檔案，交付成果的唯一途徑是 `git push`。這比看起來重要：若是一般的可讀寫掛載，agent 可以在 `.git/hooks` 寫入一個 git hook，等你下次在那個目錄使用 git 時，hook 就會在 Mac 上以你的身分執行。掛進去的是整個 repo 目錄，包含未追蹤的檔案與 git 忽略的檔案。所以專案目錄裡不能放任何 secret。`sbx.sh` 只要找到檔名看起來像 secret 的未追蹤檔案，不論 git 是否忽略它（`.env*`、`*.pem`、`*.key`、`*.pfx`、`.netrc`、`.npmrc` 與類似的檔名，比對時不分大小寫），就拒絕啟動 sandbox，也拒絕重新接上互動式的 sandbox；`AGENT_ALLOW_FILES_IN_TREE=1` 可以略過這項檢查。檔名是以 NUL 分隔讀取的，所以位在含有非 ASCII 字元路徑底下的檔案也找得到。這項檢查只看檔名，所以它是提醒，不是保證。
+- 對外連線除了 allowlist 所列的主機之外一律拒絕，以主機名稱過濾。`setup` 要求 sbx 使用 deny-all 的網路 preset（`sbx policy init deny-all`），再加上 `sandbox/allowlist.txt` 所列的主機。`sandbox/allowlist-build.txt` 裡的套件 registry 是逐個 sandbox 加入的，只給需要建置的 stage。如果機器上已經有 preset（Docker 的「balanced」preset 允許套件管理工具），`setup` 會停下來，要求你加上 `AGENT_RESET_POLICY=1` 重跑。那會先執行 `sbx policy reset --force`，移除這台機器上所有既有的 sbx 網路規則。`setup` 設定過 deny-all 之後會在 host 上記下這件事，所以之後為了更新固定的工具副本而重跑 `setup` 時不需要 reset。這份紀錄只是為了方便。Preset 是整台機器共用的，可以在這支腳本之外被改掉，而已經存在的 sandbox 會保留它當初拿到的設定。所以 `sbx.sh` 每次建立 sandbox，以及 `up` 每次重新接上互動式的 sandbox 時，都會從 sandbox 內用 `curl` 發出最多三個請求。首先是 allowlist 上的 `https://github.com/`，它必須回應 2xx 或 3xx 的狀態。如果沒有，腳本分不出「被拒絕」與「沒有網路」，就以「cannot check」停止。接著是 `https://example.com/`，不需要建置的 stage 另外再加上 `https://registry.npmjs.org/`。任何一個回應 2xx 或 3xx，就代表那個主機連得上，腳本拒絕繼續。完全沒有回應，或回應 4xx 或 5xx，都算被拒絕：這些 URL 真的連到時會回應 200，所以錯誤狀態被視為 proxy 代替那個主機回應。Sandbox 內沒有 `curl`，或 `sbx exec` 失敗，同樣是「cannot check」。`AGENT_SKIP_NETWORK_PROBE=1` 可以越過「cannot check」繼續；它不能略過一個已經被發現連得上的主機。用了這個略過之後，剩下的請求仍然會發出，被發現連得到的主機仍然會讓 script 停下；被略過的只有那個無法判定的請求。被拒絕的互動式 sandbox 會留在原處供你檢查；無人值守 job 的 sandbox 則會被移除，因為沒有人在場檢查它。這是當下對三個主機的抽查。它不能證明實際生效的 allowlist 等於這個專案的清單，也不是持續性的檢查。（**待驗證**（在實機上）：被 sbx proxy 拒絕的請求從裡面看起來是什麼樣子，是沒有回應還是哪個狀態，以及 `github.com` 是否連得上。）Allowlist 同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
 - VM 內沒有任何 GitHub 憑證。Host 上的 proxy 把佔位值換成你的 agent GitHub App 的一小時 token，token 由 host 上的 helper 在需要時產生。App 的 private key 不離開 host。SSH agent forwarding 會被關掉，因為它預設是開的，會讓 agent 能以你的身分 push。共用的 skills store 也會被關掉（`sbx settings set skills.defaultMode off`），因為它預設會以唯讀方式掛進每個 sandbox。
-- 每個被派發的 stage 一個 sandbox，絕不重複使用。無人值守的 job 會拿到一個以時間戳記結尾的唯一名稱，`ag-<tag>-<story>-<stage>-<harness>-<timestamp>`，結束後 sandbox 會被移除。如果同名的 sandbox 已經存在，job 會拒絕啟動。互動式的 sandbox 依 stage 命名，`ag-<tag>-<stage>-<harness>`，所以 `up claude`（impl）與 `up claude review` 是兩個不同的 sandbox，而 `up` 只會重新接上為同一個 stage 建立的那一個。`<tag>` 是 `<owner>-<repo>` 轉成小寫後的前 8 個字元、一個連字號，再加上 `<owner>/<repo>` 的 hash 的 6 個十六進位字元。Sandbox 名稱上限是 63 個字元，超過的名稱腳本會拒絕。（**待驗證**：sbx 是否接受腳本產生的最長名稱。）Stage 之間不共用檔案、行程或登入狀態，而且各自只拿到它需要的東西（見第 5 節的「角色分配」）。
-- 專案目錄裡的任何東西都不會在 host 上被執行。建立 sandbox 的工具是從 default branch 取出、固定在 repo 之外的副本，位置是 `~/.local/share/agent-dev/<owner>-<repo>/`。它以 `python3 -I` 啟動，目前目錄與 `PYTHONPATH` 因此不在 import 路徑上。Host 上的狀態以 origin remote 的 owner 與名稱為鍵，所以兩個目錄名稱相同的 clone 不會共用 helper。固定副本所在的目錄會記下它屬於哪個 repo。兩個 repo 的 `<owner>-<repo>` 名稱如果相撞（`a-b/c` 與 `a/b-c`），原本會共用工具與 token helper，所以 `sbx.sh` 會拒絕第二個，並告訴你用 `XDG_DATA_HOME` 把它們分開。Story id、stage 與 harness 在進入路徑、sandbox 名稱或指令之前都會先驗證。
+- 每個被派發的 stage 一個 sandbox，絕不重複使用。無人值守的 job 會拿到一個每次啟動都不同的名稱，`ag-<tag>-<story>-<stage>-<harness>-<stamp>`，其中 `<stamp>` 是 10 個十六進位字元，由時間加上一個隨機 byte 組成。如果同名的 sandbox 已經存在，job 會拒絕啟動，而且不會移除那個既有的 sandbox。Job 自己的 sandbox 不論 job 怎麼結束都會被移除，包含被中斷的情況。互動式的 sandbox 依 stage 命名，`ag-<tag>-<stage>-<harness>`，所以 `up claude`（impl）與 `up claude review` 是兩個不同的 sandbox，而 `up` 只會重新接上為同一個 stage 建立的那一個。`<tag>` 是 `<owner>-<repo>` 轉成小寫後的前 8 個字元、一個連字號，再加上 `<owner>/<repo>` 的 hash 的 6 個十六進位字元。Sandbox 名稱上限是 63 個字元，超過的名稱腳本會拒絕。（**待驗證**：sbx 是否接受腳本產生的最長名稱。）Stage 之間不共用檔案、行程或登入狀態，而且各自只拿到它需要的東西（見第 5 節的「角色分配」）。
+- 專案目錄裡的任何東西都不會在 host 上被執行。建立 sandbox 的工具是從 default branch 取出、固定在 repo 之外的副本，位置是 `~/.local/share/agent-dev/<owner>-<repo>/`。它以 `python3 -I` 啟動，目前目錄與 `PYTHONPATH` 因此不在 import 路徑上。Host 上的狀態以 origin remote 的 owner 與名稱為鍵，所以兩個目錄名稱相同的 clone 不會共用 helper。固定副本所在的目錄會記下它屬於哪個 repo。兩個 repo 的 `<owner>-<repo>` 名稱如果相撞（`a-b/c` 與 `a/b-c`），原本會共用工具與 token helper，所以 `sbx.sh` 會拒絕第二個，並告訴你用 `XDG_DATA_HOME` 把它們分開。`up` 重新接上 sandbox 時也會做同樣的歸屬檢查。Story id、stage 與 harness 在進入路徑、sandbox 名稱或指令之前都會先驗證。
 
 Lima（`sandbox/vm.sh`）保留在 repo 裡作為備援。它不屬於支援的安裝路徑。它在三方面較弱：workspace 是可讀寫掛載、連線以位址而非主機名稱過濾、App 的 key 必須放在 VM 內。住在它裡面的 self-hosted runner（`sandbox/runner/`、`agent-job.yml`）有已知的缺口：allowlist 缺少 GitHub Actions runner 需要的主機，而且 runner 的服務拿不到 `AGENT_APP_ID` 與 `AGENT_APP_KEY`。Docker Sandboxes 與 Lima 都還沒在實機上跑過，見第 9 節。
 
@@ -110,11 +110,11 @@ Sandbox 拿到的從來不是 App 的全部權限。`tools/agentctl/profiles.py`
 | `risk-gate` | 風險分級；T2 需要人類對目前的 commit 核准 | 程式 + 人 |
 | `agent-review` | 由另一個 agent 審查實作，並檢查測試是否真的驗到所描述的行為 | Agent |
 
-`spec-verify` 與 `risk-gate` 由 **base branch 的那份工具執行，使用 base branch 的 policy**，所以一個 PR 無法修改審判自己的規則。那份工具以 `python3 -I tools/run.py` 啟動。`-I` 讓目前目錄與 `PYTHONPATH` 不在 Python 的 import 路徑上。沒有它的話，PR 的 tree 裡一個名為 `agentctl.py` 或 `json.py` 的檔案會取代真正的 module 被 import，因為負責判定的 job 就在那個 tree 裡工作。`spec-verify` 本身不執行任何 PR 的程式碼：測試在 `ci` job 裡跑，結果以檔案交給 `spec-verify` 判定。這些檔案是由執行過 PR 程式碼的 job 產生的，所以 `spec-verify` 把它們當成不可信的輸入。Artifact 被解開在 runner 的暫存目錄裡，位於兩個 checkout 之外。只有一般的 `*.xml` 檔與 `collected.json` 會被往下傳，artifact 裡任何地方出現 symbolic link 都會讓 job 失敗。提供判定程式的 base branch 是最後才 checkout 的。早期版本把 artifact 解開在 PR 的 checkout 裡，symbolic link 可以在那裡把檔案導向判定程式所在的 checkout。這保護的是判定程式，不是結果的內容；結果的內容仍然是那個 job 寫出來的東西，見下面關於測試那一節結尾的兩個邊界。（**待驗證**：`actions/download-artifact` 遇到帶有惡意的壓縮檔時的行為。）
+`spec-verify` 與 `risk-gate` 由 **base branch 的那份工具執行，使用 base branch 的 policy**，所以一個 PR 無法修改審判自己的規則。那份工具以 `python3 -I tools/run.py` 啟動。`-I` 讓目前目錄與 `PYTHONPATH` 不在 Python 的 import 路徑上。沒有它的話，PR 的 tree 裡一個名為 `agentctl.py` 或 `json.py` 的檔案會取代真正的 module 被 import，因為負責判定的 job 就在那個 tree 裡工作。`spec-verify` 本身不執行任何 PR 的程式碼：測試在 `ci` job 裡跑，結果以檔案交給 `spec-verify` 判定。這些檔案是由執行過 PR 程式碼的 job 產生的，所以 `spec-verify` 把它們當成不可信的輸入。Artifact 被解開在 runner 的暫存目錄裡，位於兩個 checkout 之外。只有一般的 `*.xml` 檔與 `collected.json` 會被往下傳，artifact 裡任何地方出現 symbolic link 都會讓 job 失敗。提供判定程式的 base branch 是最後才 checkout 的。早期版本把 artifact 解開在 PR 的 checkout 裡，symbolic link 可以在那裡把檔案導向判定程式所在的 checkout。這保護的是判定程式，不是結果的內容；結果的內容仍然是那個 job 寫出來的東西，見下面關於測試那一節結尾的邊界。（**待驗證**：`actions/download-artifact` 遇到帶有惡意的壓縮檔時的行為。）
 
 只有合併到 `main` 的 PR 會被判定。`ci`、`security` 與 `risk-gate` 只有在這個 base 上才會被 PR 事件觸發（`branches: [main]`）。`risk-gate` 也會因為 review 而執行，而 review 事件無法以 base branch 過濾，所以當 PR 的 base 不是 default branch 時，它的第一個步驟會失敗。它必須在那裡失敗，不能被跳過：GitHub 把被跳過的 job 算成通過的 required check，而那個結果在 PR 改 base 之後仍然留在 commit 上。在別的 base 上取得的 status，不能出現在之後改以 `main` 為目標的 commit 上。沒有 push 就把 base 改成 `main` 的 PR 沒有 `ci`、`security` 或 `spec-verify` 的結果，因為這些 workflow 不會因為 base 改變而執行，所以它會一直被擋住，直到下一次 push 讓所有檢查針對 `main` 重跑。（**待驗證**。）
 
-Story 的 PR 由 conductor 以 draft 開啟。Draft 只跑 lint；實作 stage 完成後 conductor 把它轉為可審，完整的 gate 才執行。這是為了節省 Actions 額度，見第 6 節。
+Story 的 PR 由 conductor 以 draft 開啟。在 draft 上，`ci` 只跑 lint，`security` 與 `spec-verify` 則被跳過。GitHub 把被跳過的 check 算成通過。這之所以可以接受，只因為 draft 無法合併，而且把它轉為可審（`ready_for_review`）會在同一個 commit 上觸發一次完整的執行。實作 stage 完成後 conductor 把它轉為可審，完整的 gate 才執行。這是為了節省 Actions 額度，見第 6 節。
 
 ### 風險分級
 
@@ -122,28 +122,28 @@ Story 的 PR 由 conductor 以 draft 開啟。Draft 只跑 lint；實作 stage �
 
 - **T0** 純文件。Checks 綠即可。
 - **T1** 屬於某個已核准 story 的程式變更。Checks 與 agent review 通過即可。
-- **T2** 需要人類核准。包括：guardrail 本身（`.github/`、`policy/`、`tools/`、`prompts/`、`.gitleaks.toml` 與 `.semgrepignore` 這類掃描工具的設定等）、spec 與 sprint、高風險程式路徑（auth、付款、migration、infra）、任何依賴的新增或變更（manifest、任何 `*.lock`、`*.lockb` 或 `*.lockfile`，以及 `.npmrc`、`pip.conf` 這類 registry 設定；每一項在 CODEOWNERS 都有對應的條目）、超過大小門檻的 diff、不屬於任何 story 的程式變更。
+- **T2** 需要人類核准。包括：guardrail 本身（`.github/`、`policy/`、`tools/`、`prompts/`、`.gitleaks.toml` 與 `.semgrepignore` 這類掃描工具的設定等）、spec 與 sprint、高風險程式路徑（auth、付款、migration、infra）、對 `policy/risk-tiers.toml` 所列的依賴 manifest 與 lock 檔的變更（常見的 manifest、任何 `*.lock`、`*.lockb`、`*.lockfile`、`*.sum` 或 `*.resolved`，以及 `.npmrc`、`pip.conf` 這類 registry 設定；這份清單要由專案依自己的技術組合補充）、超過大小門檻的 diff、不屬於任何 story 的程式變更。
 
 測試檔不算 T0。削弱一個測試就是行為變更。
 
 變更的路徑是用 `git diff -z` 讀取的。沒有 `-z` 的話，git 會把含有特殊字元（例如非 ASCII 字元）的路徑加上引號，而加了引號的路徑對不上 policy 裡的任何 pattern。
 
-`risk-gate` 會把分級公布兩次。PR 上的 label `tier:T0`、`tier:T1` 或 `tier:T2` 是給人看的。Head commit 上的 commit status `risk-tier/T0`、`risk-tier/T1` 或 `risk-tier/T2`，才是 conductor 決定能不能啟用 auto-merge 時讀取的依據。Agent 的 token 有 issues: write，可以改 label，但它不能寫入 commit status。同一個 commit 上有不只一個這種 status 時，採用最嚴格的那個；一個都沒有的 commit 視為 T2。（**待驗證**：這些 status 是否出現在 `statusCheckRollup` 裡，conductor 就是從那裡讀取的。）
+`risk-gate` 會把分級公布兩次。PR 上的 label `tier:T0`、`tier:T1` 或 `tier:T2` 是給人看的。Head commit 上的 commit status `risk-tier/T0`、`risk-tier/T1` 或 `risk-tier/T2`，才是 conductor 決定能不能啟用 auto-merge 時讀取的依據。Agent 的 token 有 issues: write，可以改 label，但它不能寫入 commit status。同一個 commit 上有不只一個這種 status 時，採用最嚴格的那個；一個都沒有的 commit 視為 T2。這個 status 是在 commit 上，不是在 PR 上，所以同一個 commit 可能帶有不只一次執行留下的 status；採用最嚴格的那個只會讓 conductor 更謹慎。（**待驗證**：這些 status 是否出現在 `statusCheckRollup` 裡，conductor 就是從那裡讀取的。）
 
 ### 「AI 說會寫 test XYZ，不代表真的寫了」
 
 你核准的 story 裡，每個 test case 有一個 ID（`TC-012-03`）。之後四層檢查，前三層不依賴任何 agent 的說法：
 
-1. **Traceability。** 測試名稱必須帶 TC ID。CI 讀測試執行器輸出的 JUnit XML，確認每個 ID 都有至少一個實際執行且通過的測試。被 skip 的、不存在的、只寫在註解裡的都不算。依據是執行結果，不是搜尋原始碼。在還沒改動的情況下，`make test` 透過 `tools/junit_unittest.py` 對 `tests/` 執行 Python 的 unittest，並寫出 `reports/junit/unittest.xml`，所以新專案在選定技術組合之前就能產生 JUnit XML。
-2. **Red-green。** 把 PR 的測試檔疊到 main 的一份乾淨 checkout 上執行，必須失敗；在 PR 上必須通過。`assert True` 這種空測試在 main 上就會通過，因而被擋下。在 main 上執行之前會先跑 `policy/project.toml` 的 `setup_cmd`，測試才不會只因為缺少依賴而失敗。「紅」必須是測試執行器回報出來的結果。在 main 上被 skip 的測試不算紅。如果在 main 上的執行完全沒有產生報告，這項檢查判定失敗，因為什麼都沒有被證明。`setup_cmd` 本身在 main 上失敗時，這項檢查也判定失敗，因為這時測試失敗證明不了任何事。報告存在但其中沒有某個測試時，只有在那份報告裡有東西失敗或出錯的情況下才算紅：常見的原因是實作還不存在，測試檔無法被 import，而測試執行器會把這記成一個 error。如果報告裡完全沒有失敗或出錯的項目，代表疊上去的測試根本沒有執行，這項檢查判定失敗。Setup 指令的結束狀態（`collected.json` 裡的 `setup_exit`）與 JUnit 檔都是由執行 PR 程式碼的那個 job 寫出來的。所以這些檢查抓的是無心的錯誤，而且同樣受下面所說的限制：結果可以被捏造。
-3. **不得消失。** 在 main 上通過的 TC 必須繼續通過，即使它的 spec 在同一個變更裡被刪掉。要拿掉一條 TC，唯一的辦法是把它列進 `docs/specs/retired.toml`（`retired = ["TC-012-03"]`）。這個檔案與 spec 都受 CODEOWNERS 保護，agent 不能悄悄刪掉一條 TC。比對的對象是 main 上最新一次已完成、而且留有結果的 `ci` 執行，不論那次執行的結論是什麼。早期版本堅持要一次全綠的執行，最近的執行都不是綠的就判定失敗，結果是 main 一旦變紅就無法修復。如果沒有任何一次執行留有結果（新專案，或 artifact 過了 90 天已經過期），`spec-verify` 只發出警告：沒有東西可以比對。
+1. **Traceability。** 測試名稱必須帶 TC ID。CI 讀測試執行器輸出的 JUnit XML，確認每個 ID 都有至少一個實際執行且通過的測試。被 skip 的、不存在的、只寫在註解裡的都不算。依據是執行結果，不是搜尋原始碼。在還沒改動的情況下，`make test` 透過 `tools/junit_unittest.py` 對 `tests/` 執行 Python 的 unittest，並寫出 `reports/junit/unittest.xml`，所以新專案在選定技術組合之前就能產生 JUnit XML。在這個 runner 裡，標成 `expectedFailure` 而斷言失敗的測試會被回報為 skipped，所以它絕不會被算成通過的 test case。
+2. **Red-green。** 把 PR 的測試檔疊到 main 的一份乾淨 checkout 上執行，必須失敗；在 PR 上必須通過。`assert True` 這種空測試在 main 上就會通過，因而被擋下。在 main 上執行之前會先跑 `policy/project.toml` 的 `setup_cmd`，測試才不會只因為缺少依賴而失敗。「紅」必須是測試執行器回報出來的結果。在 main 上被 skip 的測試不算紅。如果在 main 上的執行完全沒有產生報告，這項檢查判定失敗，因為什麼都沒有被證明。`setup_cmd` 本身在 main 上失敗時，這項檢查也判定失敗，因為這時測試失敗證明不了任何事。報告存在但其中沒有某個測試時，只有在那份報告裡有某個失敗或錯誤屬於這個 story 疊上去的測試檔之一的情況下才算紅。比對的方式是拿檔名（不含副檔名），到失敗測試的 class、名稱或檔案裡去找。常見的原因是實作還不存在，測試檔無法被 import，而測試執行器會把這記成一個以該檔案命名的 error。main 上其他地方不相干的失敗不算數。如果沒有任何失敗屬於這個 story 的測試檔，代表它的測試根本沒有執行，這項檢查判定失敗。Setup 指令的結束狀態（`collected.json` 裡的 `setup_exit`）與 JUnit 檔都是由執行 PR 程式碼的那個 job 寫出來的。所以這些檢查抓的是無心的錯誤，而且同樣受下面所說的限制：結果可以被捏造。
+3. **不得消失。** 在 main 上通過的 TC 必須繼續通過，即使它的 spec 在同一個變更裡被刪掉。要拿掉一條 TC，唯一的辦法是把它列進 `docs/specs/retired.toml`（`retired = ["TC-012-03"]`）。這個檔案與 spec 都受 CODEOWNERS 保護，agent 不能悄悄刪掉一條 TC。比對的對象是 main 上最新的、已完成而且留有結果的 `ci` 執行，最多五次，不論那些執行的結論是什麼；在其中任何一次通過的 TC 都必須繼續通過。堅持要一次全綠的執行，會讓 main 一旦變紅就無法修復。只取最新的一次，則會讓 main 上一次不完整的執行就足以讓較早的涵蓋範圍被遺忘。Artifact 不存在或已過期的執行會被略過。列出或下載 artifact 失敗時，job 會失敗；它不會被誤認成「沒有歷史」。如果沒有任何一次執行留有結果（新專案，或 artifact 過了 90 天已經過期），`spec-verify` 只發出警告：沒有東西可以比對。
 4. **測試有效性的稽核。** 審查 agent（不同於寫測試與寫實作的 agent）對每個 TC 逐條判斷：測試的斷言是否真的驗證了描述的行為。這層補的是前三層看不到的情況：測試存在、會紅會綠，但驗的是錯的東西。
 
 前三層由 `spec-verify` 這一個 check 執行。
 
 Merge 之後，`evidence` workflow 把「AC → TC → 測試 → 結果」的對照表貼到 story 的 issue 上。你看這張表，不用讀程式。
 
-這套保證的邊界有兩個。第一，它確保你核准的每個 TC 都有一個會隨行為改變的測試在跑，但不保證 TC 清單本身完整；清單的完整性取決於 PO 的提問與你核准 story 時的審閱。第二，測試結果是由 PR 的程式碼產生的，agent 有能力直接寫出假的結果檔。這沒有硬性的防線，靠的是 `Makefile` 受保護、審查 agent 與每週抽查。
+這套保證的邊界有三個。第一，它確保你核准的每個 TC 都有一個會隨行為改變的測試在跑，但不保證 TC 清單本身完整；清單的完整性取決於 PO 的提問與你核准 story 時的審閱。第二，測試結果是由 PR 的程式碼產生的，agent 有能力直接寫出假的結果檔。這沒有硬性的防線，靠的是 `Makefile` 受保護、審查 agent 與每週抽查。第三，red-green 證明的是這個 story 的測試在 main 上不會通過，但沒有證明原因。一個刻意寫成在 main 上與在 branch 上行為不同的測試（例如檢查某個檔案是否存在），仍然可以滿足它，因為測試本身就是 PR 的程式碼。抓出這種情況，是 review 對每個 test case 逐條稽核的工作，也就是第四層。
 
 ### `agent-review` 的強度
 
@@ -151,7 +151,7 @@ Merge 之後，`evidence` workflow 把「AC → TC → 測試 → 結果」的�
 
 Claude 的 review 是一個 workflow，`agent-review.yml`，由 conductor 從 default branch 啟動。審查者在 default branch 的 checkout 裡執行。PR 被 checkout 在旁邊的 `./pr`，只當作資料，所以 Claude Code 的設定與 hooks 絕不會來自 PR。Workflow 會先確認這個 PR 是開啟的、來自本 repo、以 default branch 為目標。一次 review 只針對一個 commit：conductor 會把它記在派工 marker 裡的那個 commit 傳進去（`sha` 這個輸入）。Job 開始時如果 PR 的 head 已經是另一個 commit，job 會在審查之前失敗，不發布任何東西，conductor 再針對新的 head 重新要求一次。負責審查的 job 只有唯讀的 token。`--tools` 把這個 session 裡存在的工具限制為 Read、Grep、Glob、Write 與 Bash，`--allowedTools` 則只對 Bash 預先核准三個唯讀的 `git` 指令。它把判定結果寫在 `$RUNNER_TEMP` 下，位於兩個 checkout 之外。另一個獨立的 `publish` job 從頭到尾看不到 PR 的檔案，由它貼出審查意見並寫入 status。只有 review 這個步驟本身成功時，判定結果才算數；否則 status 是失敗，絕不會是通過。實作 agent 的 token 沒有寫入 commit status 的權限，所以無法偽造。具名開發者的 review 只使用 `CLAUDE_CODE_OAUTH_TOKEN_<LOGIN>`。不帶後綴的名稱只用在沒有指定開發者的 story。在 GitHub Actions 上，conductor 在派發 review 之前會先確認這個 token 存在，不存在時派工會在寫入任何東西之前失敗。本機 conductor 看不到 GitHub 的 secret。從那裡派發時，workflow 會啟動，review 步驟沒有憑證而失敗，`publish` 寫入失敗的 status。（**待驗證**：`anthropics/claude-code-action` 的 `github_token` 輸入與 `--allowedTools` 參數，以及 `--tools` 是否確實限制了可用的工具。）
 
-Codex 的 review 來自它的 GitHub 整合，由 `bridge` job 轉成 status。若 review 改在一般的雲端 session 中進行，審查者與實作者可能是同一個 GitHub 身分，這時無法從身分上區分兩者。
+Codex 的 review 來自它的 GitHub 整合，由 `bridge` job 轉成 status。若 review 改在一般的雲端 session 中進行，審查者與實作者可能是同一個 GitHub 身分，這時無法從身分上區分兩者。由留言啟動、或在本機 sandbox 裡執行的 review，prompt 會寫明要審查的 commit，並要求審查者在 PR 的 head 是另一個 commit 時停止。那是給 agent 的指示，不是像 workflow 的檢查那樣的強制手段。
 
 剩下的問題，就是這個 check 最弱的原因。審查者讀的是不可信的文字：PR 的 diff、commit 訊息與檔案。這些文字可以說服它做出錯誤的判定。上面的隔離限制的是一個被誤導的審查者能做什麼，不是它會得出什麼結論。
 
@@ -230,7 +230,7 @@ Conductor 是決定性的程式，不是 agent，所以在你的 Mac 上直接�
 - **你要外出**：`bin/agentctl conductor away`，或直接按 Ctrl-C。交給 GitHub Actions。
 - **你忘了交接就闔上筆電**：本機 conductor 在每一輪成功之後更新一個 lease。Actions 每四小時的排程執行會讀取它，超過 20 分鐘沒更新就接手。
 
-兩個 repo variable 決定由哪一邊動作：`CONDUCTOR_HOME`（`local` 或 `actions`）與 `CONDUCTOR_LEASE`，後者的值是 `<epoch 秒數> <持有者>`。持有者的格式是 `<developer>@<host>:<pid>`。本機 conductor 先公布 lease，才宣告自己接手。它只在一輪成功之後更新 lease，連續三輪失敗就交給 Actions，而且一旦 lease 上的名字換成別人（例如第二個本機行程）就立刻停止。兩邊都是在每一輪開始時即時讀取這兩個 variable，並且在送出每一次派工之前再讀一次；lease 一旦換了人，conductor 就停止這一輪。`CONDUCTOR_HOME` 是 `local` 的期間，Actions 上由事件觸發的執行會被跳過，不耗分鐘。排程執行（每四小時）與手動啟動的執行仍然會開始。如果它發現一個還有效、屬於開發者 X 的 lease，它會派發 sprint 檔指定給其他具名開發者的 story，因為本機 conductor 只握有 X 的憑證，不會去碰那些 story。它也會執行暫停（halt，以及關掉 auto-merge；見「Fuses」）。其餘什麼都不做。如果 lease 的 variable 讀不到，Actions 上的執行什麼都不做。
+兩個 repo variable 決定由哪一邊動作：`CONDUCTOR_HOME`（`local` 或 `actions`）與 `CONDUCTOR_LEASE`，後者的值是 `<epoch 秒數> <持有者>`。持有者的格式是 `<developer>@<host>:<pid>`。本機 conductor 先公布 lease，才宣告自己接手。它只在一輪成功之後更新 lease，而且只有在 lease 上的名字仍然是它的時候才更新：因為 lease 換了人而停下的那一輪，之後不會再更新 lease，conductor 會直接停止。它連續三輪失敗就交給 Actions，而且一旦 lease 上的名字換成別人（例如第二個本機行程）就立刻停止。兩邊都是在每一輪開始時即時讀取這兩個 variable，並且在送出每一次派工之前再讀一次；lease 一旦換了人，conductor 就停止這一輪。`CONDUCTOR_HOME` 是 `local` 的期間，Actions 上由事件觸發的執行會被跳過，不耗分鐘。排程執行（每四小時）與手動啟動的執行仍然會開始。如果它發現一個還有效、屬於開發者 X 的 lease，它會派發 sprint 檔指定給其他具名開發者的 story，因為本機 conductor 只握有 X 的憑證，不會去碰那些 story。它也會在該撤回的地方撤回 auto-merge，並執行暫停（見「Fuses」）。其餘什麼都不做。如果 lease 的 variable 讀不到，或 lease 還有效但沒有寫明開發者（較舊的格式），這次執行不派發任何東西，但仍然會處理 halt 與 auto-merge 的撤回。
 
 Lease 不是鎖。Repo variable 沒有 compare-and-set，所以在交接前後，兩個 conductor 可能重疊。每個 conductor 在送出每一次派工之前都會重新讀取 lease，lease 換了人就停止這一輪。這把重疊的範圍縮小到已經在送出途中的那一次派工。但它沒有消除重疊：同一個 stage 可能被派發兩次。派工會先以 marker 記錄下來，然後才送出；送出失敗時 marker 會被撤回。所以派工可能重複，但不會漏掉。
 
@@ -250,7 +250,7 @@ Pipeline 的 secret 放在一個名為 `conductor` 的 GitHub environment 裡，
 
 **規劃時，由 agent 判斷，你核准。** Planner（`prompts/planner.md`）讀所有候選 story 與程式碼，為每個 story 確定 `depends_on`（必須先合併的 story）、`touches`（會動到的模組與共用資源）、`priority`。這些寫在 `spec.toml` 裡，隨 sprint PR 給你核准。你核准的是範圍與優先序。
 
-**執行時，由程式計算。** 一個 story 可以開工的條件：相依的 story 都已合併、沒有被標為 blocked、它的 `touches` 與進行中的 story 沒有交集、未超過同時進行的上限。符合條件的依 priority、能解鎖的下游數量、編號排序。已經開工、之後卻要等 triage 追加的相依 story 的 story 會被停放：它不佔名額，也不佔用它的 `touches`，所以即使兩者動到同一個地方，它等待的那個 story 仍然可以開工。同樣的輸入永遠得到同樣的結果，不耗額度，可以完整地單元測試。
+**執行時，由程式計算。** 一個 story 可以開工的條件：相依的 story 都已合併、沒有被標為 blocked、它的 `touches` 與進行中的 story 沒有交集、未超過同時進行的上限。符合條件的依 priority、能解鎖的下游數量、編號排序。已經開工、之後卻要等 triage 追加的相依 story 的 story 會被停放：它不佔名額，也不佔用它的 `touches`，所以即使兩者動到同一個地方，它等待的那個 story 仍然可以開工。好幾個已經開工的 story 同時重新符合條件時（追加的相依 story 合併了，或有人解除了它們的阻擋），編號最小的先拿到新的工作，數量不超過 `wip_limit`，而且絕不會同時讓兩個動到同一個地方的 story 進行。其餘的要等其中一個合併之後才輪到。同樣的輸入永遠得到同樣的結果，不耗額度，可以完整地單元測試。
 
 **出狀況時，由一個短命的 triage session 判斷。** 規劃出來的相依關係會有錯，常見的是做到一半才發現需要另一個還沒完成的 story。Conductor 偵測到 stage 反覆失敗或停滯時，啟動 triage agent（`prompts/triage.md`）。它只能做三件事：追加一條「blocked by」關聯、要求重試並說明該怎麼做不同、或升級給你並附上選項。它不能改 spec、不能改 sprint 範圍、不能動程式或測試。
 
@@ -269,15 +269,15 @@ Pipeline 的 secret 放在一個名為 `conductor` 的 GitHub environment 裡，
 - PR 落後 main 時更新 branch；有衝突時派解衝突的任務。
 - Fix、解衝突與 review 都綁定在派工當時的那個 commit 上。Fix 在 branch 前進之前都算進行中。每個新的 commit 都需要自己的 review 判定；決定這件事的不是 `done:review` label。
 - Conductor 從目前所在的位置送不出去的 stage（conductor 在 Actions 上時的本機 sandbox，或 conductor 在你的 Mac 上執行時另一位開發者的 story）會被延後，而且不寫入任何東西。
-- 在先前的 sprint 已經合併的相依 story 視為已滿足。Triage 要求「重試」之後，story 仍然會等 triage 追加的相依 story。
+- 在先前的 sprint 已經合併的相依 story 視為已滿足。辨認的依據是它的 spec 定義的確切 branch 名稱。Triage 要求「重試」之後，story 仍然會等 triage 追加的相依 story。
 - 加上 `--dry-run` 時，它只印出會做的事，不建立任何東西，連追蹤用的 issue 也不建立。
 - main 變紅時停止派發，只派一個修復任務。
 - 某個 harness 額度用盡時改用 fallback，都用盡就等待。
-- 所有 gate 通過後啟用 auto-merge，但只限 `policy/conductor.toml` 的 `auto_merge_tiers` 所列的分級。分級來自 `risk-tier/*` 這個 commit status，不是來自 label。Auto-merge 只針對做出決定時的那個 commit 啟用（`gh pr merge --match-head-commit`）：如果 branch 已經前進，GitHub 會拒絕，下一輪再重新決定。（**待驗證**。）
+- 所有 gate 通過後啟用 auto-merge，但只限 `policy/conductor.toml` 的 `auto_merge_tiers` 所列的分級。分級來自 `risk-tier/*` 這個 commit status，不是來自 label。Auto-merge 只針對做出決定時的那個 commit 啟用（`gh pr merge --match-head-commit`）：如果 branch 已經前進，GitHub 會拒絕，下一輪再重新決定。（**待驗證**。）GitHub 會讓 PR 上的 auto-merge 請求在之後的 push 之後繼續留著。所以 conductor 在每一輪都會檢查每個已開啟 auto-merge 的 story PR，只要它不再符合當初啟用的條件，就把 auto-merge 撤回（`disable-auto-merge`）。這些條件是：不是 draft、沒有等待中的人類 review、四個機械檢查與 `agent-review` 都是綠的，而且它的分級在 `auto_merge_tiers` 裡。等 PR 重新符合條件時再啟用。在一次 push 與 conductor 的下一輪之間，這個請求仍然有效；第 10 節說明這段空窗可能放行什麼。
 
 ### Fuses
 
-- **Kill switch**：把 repo variable `CONDUCTOR_PAUSED` 設為 `true`。Actions 上的 job 與本機 conductor 在每一輪都透過 API 即時讀取它，所以已經在執行的本機 conductor 會在一輪之內停下。暫停期間 conductor 不派工，也不開 PR。它只做一件事：把每個已經開啟 auto-merge 的開啟中 PR 的 auto-merge 關掉，否則 GitHub 會在 check 變綠時自己合併這種 PR。這發生在 conductor 下一次執行時，不是在你設定 variable 的那一刻。不論下一個執行的是哪個 conductor 都會做，包含發現本機 lease 還有效的 Actions 執行。要立刻停止，請同時自己執行 `gh pr merge NUMBER --disable-auto`。讀不到的 variable 不會被當成沒有設定：如果 `CONDUCTOR_PAUSED` 或額度的 variable `CONDUCTOR_QUOTA` 讀不到，conductor 的行為等同暫停。額度的 variable 與 lease 也是同樣即時讀取。（**待驗證**：以 Conductor App 的身分執行 `--disable-auto`。）
+- **Kill switch**：把 repo variable `CONDUCTOR_PAUSED` 設為 `true`。Actions 上的 job 與本機 conductor 在每一輪都透過 API 即時讀取它，所以已經在執行的本機 conductor 會在一輪之內停下。暫停期間 conductor 不派工，也不開 PR。它只做一件事：把每個已經開啟 auto-merge 的開啟中 PR 的 auto-merge 關掉，否則 GitHub 會在 check 變綠時自己合併這種 PR。這發生在 conductor 下一次執行時，不是在你設定 variable 的那一刻。不論下一個執行的是哪個 conductor 都會做，包含發現本機 lease 還有效的 Actions 執行。要立刻停止，請同時自己執行 `gh pr merge NUMBER --disable-auto`。讀不到的 variable 不會被當成沒有設定。`CONDUCTOR_PAUSED`、`CONDUCTOR_BOT` 與 `CONDUCTOR_QUOTA` 會先一起讀取，只要其中任何一個讀不到，這一輪的行為就等同暫停，而且仍然會撤回 auto-merge。有兩件事要分清楚。只要某一輪看到暫停，或讀不到某個 variable，派工就會停止。已經開啟的 auto-merge 則要等到某一輪能列出 PR 並成功呼叫 GitHub 之後，才算已經撤回。如果 GitHub 的 API 完全失效，就什麼都撤回不了，這時手動指令仍然是最後的辦法。Lease 也是同樣即時讀取。（**待驗證**：以 Conductor App 的身分執行 `--disable-auto`。）
 - 上限：同時進行的 story 數、每日開啟的 PR 數、同一 stage 的重試次數、fix 與 review 的來回輪數、triage 次數。超過就升級給你，不會無限重試。
 
 ### Actions 額度
@@ -344,12 +344,14 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 
 **已在開發時驗證：**
 
-- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 135 個單元測試。
+- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 140 個單元測試。
 - Red-green 在一個真實的 git repo 上端對端執行，分成收集與判定兩步：空測試被擋下，改成真的測試後通過；沒有執行收集步驟時判定為失敗而非通過。
 - `spec-verify` 裡只保留一般結果檔的那個步驟，照 workflow 裡寫的樣子執行過，對象是一個含有 symbolic link 與無關檔案的 artifact。
+- `ci.yml` 裡取得比對基準的步驟與過濾的步驟，照 workflow 裡寫的樣子對一個假的 `gh` 執行過：七次執行，其中有 artifact 不存在與已過期的、列出被拒絕的，以及下載被拒絕的。
+- Spike 的測試流程在一個臨時的 repo 裡用 template 附帶的 runner 執行過：誠實的 story 通過兩個判定程式，而空洞的測試、沒有 id 的測試與 expected failure 都被拒絕。
 - Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、在送出工作之前留 marker 並在送出失敗時撤回、把 draft 轉為可審、單一動作失敗不影響其他動作。它會忽略偽造的 marker（不是 conductor 或名單上的人類寫的）與用來混淆的 PR（已關閉、目標是其他 base、或來自其他 repo）。lease 有效時 Actions 端不接手、過期時接手；lease 上的名字換成別人時本機 conductor 會停止。用量達門檻時，只有在設定了 overflow runner 的情況下才改寫 `CI_RUNNER`。
 - 工作目錄裡帶有惡意的 module（`agentctl.py`、`json.py`、`tomllib.py`）無法取代工具本身，只要工具是透過 `bin/agentctl` 或 `python3 -I tools/run.py` 啟動。
-- `sandbox/sbx.sh` 在下列情況拒絕執行：tree 裡有看起來像 secret 的檔案、checkout 被動過手腳、sandbox 已經存在、story id、stage 或 harness 名稱不合法。這些拒絕都檢查過；它們背後的 `sbx` 指令沒有實際跑過。這一輪另外用一個假的 `sbx` 執行過這支腳本，涵蓋網路探測、對未追蹤檔案的 secret 檔名掃描、重新接上、名稱長度上限，以及兩個 repo 名稱相撞的情況。
+- `sandbox/sbx.sh` 在下列情況拒絕執行：tree 裡有看起來像 secret 的檔案、checkout 被動過手腳、sandbox 已經存在、story id、stage 或 harness 名稱不合法。這些拒絕都檢查過；它們背後的 `sbx` 指令沒有實際跑過。這一輪另外用一個假的 `sbx` 執行過這支腳本，涵蓋網路探測、對未追蹤檔案的 secret 檔名掃描、重新接上、名稱長度上限，以及兩個 repo 名稱相撞的情況。第三次審查之後，又用假的 `sbx` 執行了一次，涵蓋探測的各種結果、位在非 ASCII 路徑底下的 secret、重新接上時的歸屬檢查，以及 job 名稱已經被佔用的情況。
 - Workflow 通過 actionlint，shell script 通過 shellcheck，指令攔截 hook 有測試。
 
 **尚未驗證，需要在你的帳號與機器上做（new-project 的 spike 與兩份 red-team checklist）：**
@@ -361,7 +363,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - `anthropics/claude-code-action` 目前的輸入參數，特別是 review 所依賴的 `github_token` 與 `--allowedTools` 參數，以及 `--tools` 是否確實限制了審查者可用的工具；Codex review bot 的帳號名稱與 review 格式。
 - 實機上的 Docker Sandboxes：`sandbox/sbx.sh` 用到的 `sbx` 指令、clone 模式、proxy 是否會把 App token 注入走 HTTPS 的 `git push`（文件沒有明講）、sandbox 內 home 目錄的路徑、各 harness 的無人值守執行方式。
 - 安裝流程現在依賴的三個 `sbx` 指令：`sbx settings set skills.defaultMode off`、`sbx policy init deny-all` 與 `sbx policy reset --force`。另外還有：clone 模式掛進去的確實是整個專案目錄，包含被忽略的檔案。
-- 在真實 sandbox 內的網路探測：裡面是否有 `curl`，以及被拒絕的請求在它看來是什麼樣子。機器層級的 policy 改變時，已經接上的互動式 sandbox 會保留什麼。sbx 是否接受腳本產生的最長 sandbox 名稱。
+- 在真實 sandbox 內的網路探測：裡面是否有 `curl`、被 sbx proxy 拒絕的請求從裡面看起來是什麼樣子（沒有回應，或是哪個狀態），以及 `github.com` 是否連得上。機器層級的 policy 改變時，已經接上的互動式 sandbox 會保留什麼。sbx 是否接受腳本產生的最長 sandbox 名稱。
 - 透過真實 API 把 App token 縮小到較少的權限，特別是 pull requests: read 的 push 用 token，以及這種 token 嘗試開 PR 或送出 review 時確實被拒絕。擋住合併的是 `main-merge` ruleset，不是 token。逐個 sandbox 的網路規則。兩者都依文件撰寫，都還沒實際跑過。
 - Team 方案的 private repo 上，帶 deployment branch 規則的 environment：從 default branch 以外的任何 ref 啟動的執行，確實拿不到 `conductor` environment 的 secret。
 - `main-merge` ruleset：它是否如第 4 節所述疊加在 `main` ruleset 之上，以及 required checks 裡的 `integration_id: 15368` 是否指的是 GitHub Actions，並且接受由 workflow job 寫入的 `agent-review` status。
@@ -373,7 +375,8 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - `sandbox/` 下的 Lima 設定與 egress 規則。它們不屬於支援的安裝路徑。
 - `.claude/settings.json` 的 sandbox 與 permission 語法是否符合目前版本。
 - 1-core runner 的實際 label；`workflow_run` 觸發 conductor 與跨 workflow 下載 artifact 所需的權限；Conductor App 寫入 repo variable 的權限。
-- Draft PR 上被跳過的 required check 在轉為可審之後的行為。
+- Draft PR 上被跳過的 required check 在轉為可審之後的行為：在它變成可以合併之前，同一個 commit 上是否出現 `ci`、`security` 與 `spec-verify` 全新的完整執行。
+- 跨越 push 的 auto-merge：push 新的 commit 時 GitHub 是否保留這個請求，以及 conductor 是否在下一輪把它撤回。
 - 額度估算與 GitHub 帳單的實際差距；Actions jobs API 回傳的 runner label 是否足以區分三類 runner。
 - 本機 conductor（`conductor here`）在真實 repo 上的行為，包含用 Mac 上的 key 產生 Conductor App 的 token。
 - GitHub Team 方案在 private repo 上的功能邊界：ruleset 與 auto-merge 可用，merge queue 與 environment 的 required reviewers 不可用。後者是 release 改用 tag 保護的原因。
@@ -395,10 +398,16 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - 你貼進 PO chat 或 issue 的內容會進入廠商的 context，不在隔離範圍內。
 - 雙語 story 的語意一致性沒有硬性保證。你核准的中文與 agent 實作的英文若有出入，只有 review agent 與你自己能發現。
 - 測試結果由 PR 的程式碼產生，可以被偽造。見第 4 節。
+- Red-green 證明的是這個 story 的測試在 main 上不會通過。一個刻意寫成在 main 上與在 branch 上行為不同的測試仍然可以滿足它，因為測試本身就是 PR 的程式碼。只有 review 對每個 test case 的稽核能抓到這種情況。
+- 由留言啟動、或在本機 sandbox 裡執行的 review，是否停留在指定的 commit 上，靠的是 prompt 裡的指示，不是檢查。
+- 哪些檔案算是依賴變更，是 `policy/risk-tiers.toml` 裡的一份清單。清單沒有點名的技術組合，它的 manifest 或 lock 檔在專案把它加進去之前不算 T2。
+- 網路探測是在 sandbox 建立或重新接上時，對三個主機做的抽查。它不能證明實際生效的 allowlist 等於這個專案的清單。
 - 審查者可能被它審查的文字說服，做出錯誤的判定。見第 4 節的「`agent-review` 的強度」。
 - Lease 不是鎖。交接前後兩個 conductor 可能重疊。每個 conductor 在送出每一次派工之前都會重新讀取 lease，這縮小了重疊的範圍，但沒有消除它。派工可能重複，但不會漏掉。
 - 某位開發者的 Mac 持有 lease 時，其他開發者的雲端 stage 只會在每四小時的 Actions 排程執行，或手動啟動的執行時前進。他們的本機 sandbox stage（`via = "sbx"`）則完全不會前進，直到他們自己的 Mac 成為 conductor。
 - 暫停只有在 conductor 下一次執行時才會撤回 auto-merge。在那之前，已經開啟 auto-merge 的 PR 只要 check 變綠，GitHub 仍然會合併它。要立刻停止，請同時手動關掉它：`gh pr merge NUMBER --disable-auto`。
+- 撤回 auto-merge 需要某一輪能列出 PR 並呼叫 GitHub。如果 GitHub 的 API 完全失效，就什麼都不會被撤回，手動指令是唯一的辦法。
+- GitHub 會讓 auto-merge 請求在之後的 push 之後繼續留著。PR 不再符合條件時，conductor 會在下一輪把它撤回，但在 push 與那一輪之間，這個請求仍然有效。GitHub 仍然要求新的 commit 通過全部五個 required check，而 `risk-gate` 會讓 T2 的 commit 失敗，直到人類核准。所以這段空窗可能放行的，是分級高於已啟用的分級、但低於 T2 的 commit（只啟用 T0 時的 T1），而且它還要在 conductor 執行之前通過 `ci`、`spec-verify` 與 `agent-review`。
 - Conductor 的帳號不論帶不帶 `[bot]` 後綴，都會被接受為 marker 的作者。因此，帳號名稱與 Conductor App 的 slug 相同的人，會被當成 marker 的作者而被採信。這個人還必須是 repo 的 collaborator 才能留言。
 - 本機 conductor 需要 Conductor App 的 private key 放在 Mac 上。它放在 repo 之外，任何 sandbox 都看不到，但它確實在 host 上。
 - Actions 用量是估算。它可能與帳單有出入，brief 裡的警示因此可能偏早或偏晚。

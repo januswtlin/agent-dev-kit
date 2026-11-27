@@ -291,6 +291,9 @@ class ArmedAutoMerge(unittest.TestCase):
         higher = self.armed()
         higher.pr.tier = "T1"
         self.assertEqual(kinds(run(state(higher), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])
+        labelled = self.armed()
+        labelled.labels = {"blocked"}
+        self.assertEqual(kinds(run(state(labelled), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])
         unreviewed = self.armed()
         del unreviewed.pr.checks["agent-review"]
         self.assertEqual(kinds(run(state(unreviewed), auto_merge_tiers=["T0"])), [("disable-auto-merge", "001", "")])

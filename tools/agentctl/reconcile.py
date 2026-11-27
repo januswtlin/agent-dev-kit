@@ -309,25 +309,31 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
 
     # 1. Advance stories already in progress.
     for story in sorted(stories.values(), key=lambda s: s.id):
-        if story.done or not story.started or "needs-human" in story.labels or "blocked" in story.labels:
+        if story.done or not story.started:
             continue
-        d = story.last_dispatch
-
-        if not all(satisfied(dep) for dep in story.deps):
-            continue  # a dependency was added after it started (triage); it waits for that story
 
         # Auto-merge stays on the pull request once enabled, whatever is pushed
         # afterwards. So it is withdrawn the moment the pull request is no longer
         # exactly what the decision was about, and enabled again if it earns it.
+        # Checked first: a label or a pending dependency must not shelter it.
         armed = story.pr
         if armed is not None and armed.auto_merge:
             eligible = (not armed.draft and not armed.awaiting_human_review
+                        and not story.labels & {"needs-human", "blocked"}
+                        and all(satisfied(dep) for dep in story.deps)
                         and _checks_state(armed, MECHANICAL_CHECKS) == "success"
                         and armed.checks.get(REVIEW_CHECK, "pending") == "success"
                         and armed.tier in policy["auto_merge_tiers"])
             if not eligible:
                 actions.append(Action("disable-auto-merge", story=story.id, reason="no longer meets what auto-merge was enabled for"))
                 continue
+
+        if "needs-human" in story.labels or "blocked" in story.labels:
+            continue
+        d = story.last_dispatch
+
+        if not all(satisfied(dep) for dep in story.deps):
+            continue  # a dependency was added after it started (triage); it waits for that story
 
         if story.id not in admitted:
             waiting += 1  # over the limit after several stories came back at once

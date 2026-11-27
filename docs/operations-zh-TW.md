@@ -59,9 +59,9 @@ bin/agentctl conductor away
 gh workflow run conductor.yml
 ```
 
-還有兩種情況會讓本機的 conductor 結束。Lease 只在成功的一輪之後續期；連續三輪失敗之後，它會把 `CONDUCTOR_HOME` 設回 `actions` 並結束。另外，如果同一個 repo 又啟動了第二個 `conductor here`，lease 上的名字會變成新的那一個，第一個會在它的下一輪停止。Repository variable 不是鎖：交接前後，兩個 conductor 可能重疊。兩者在送出每一次派發之前都會重新讀取 lease，如果 lease 已經換了對象，就停止自己的這一輪；這會縮小重疊，但無法消除它。派發是先記錄再送出，所以重疊可能讓同一個 stage 被送出兩次；它絕不會漏掉任何一次。
+還有兩種情況會讓本機的 conductor 結束。Lease 只在成功的一輪之後續期，而且只有在 lease 上的名字仍然是這個 conductor 時才續期：因為 lease 換了對象而停下的那一輪，之後不會再續期，conductor 會直接停止。連續三輪失敗之後，它會把 `CONDUCTOR_HOME` 設回 `actions` 並結束。另外，如果同一個 repo 又啟動了第二個 `conductor here`，lease 上的名字會變成新的那一個，第一個會在它的下一輪停止。Repository variable 不是鎖：交接前後，兩個 conductor 可能重疊。兩者在送出每一次派發之前都會重新讀取 lease，如果 lease 已經換了對象，就停止自己的這一輪；這會縮小重疊，但無法消除它。派發是先記錄再送出，所以重疊可能讓同一個 stage 被送出兩次；它絕不會漏掉任何一次。
 
-開發者不只一位時，要知道本機的 conductor 會留下哪些事不做。它派發它自己那位開發者的 story 與 `default` 的 story，也會做所有不屬於派發的事（開 pull request、把它們轉為可審、更新 branch）。Sprint 檔交給另一個指名的人的 story，不會從你的 Mac 派發。在你的 lease 還沒過期的期間，GitHub Actions 上排程的執行（每四小時一次）與手動啟動的執行會派發那些 story，其他什麼都不做；由事件觸發的執行仍然會被跳過。所以在你的 Mac 擔任 conductor 的期間，另一個人的雲端 stage 推進得很慢，而他在本機 sandbox 執行的 stage（`via = "sbx"`）完全不會推進，直到 `conductor here` 在他自己的 Mac 上執行。如果這有影響，就在你沒有主動盯著的時候交接給 Actions（`conductor away`）。
+開發者不只一位時，要知道本機的 conductor 會留下哪些事不做。它派發它自己那位開發者的 story 與 `default` 的 story，也會做所有不屬於派發的事（開 pull request、把它們轉為可審、更新 branch）。Sprint 檔交給另一個指名的人的 story，不會從你的 Mac 派發。在你的 lease 還沒過期的期間，GitHub Actions 上排程的執行（每四小時一次）與手動啟動的執行會派發那些 story。它們也會在該撤回的地方撤回 auto-merge，並執行暫停，其他什麼都不做；由事件觸發的執行仍然會被跳過。如果 lease 讀不到，或 lease 還沒過期但沒有寫明開發者（較舊的格式），這樣的執行不派發任何東西，但仍然會處理暫停與 auto-merge 的撤回。所以在你的 Mac 擔任 conductor 的期間，另一個人的雲端 stage 推進得很慢，而他在本機 sandbox 執行的 stage（`via = "sbx"`）完全不會推進，直到 `conductor here` 在他自己的 Mac 上執行。如果這有影響，就在你沒有主動盯著的時候交接給 Actions（`conductor away`）。
 
 想知道它現在在哪裡跑：
 
@@ -71,7 +71,7 @@ bin/agentctl conductor status
 
 | 情況 | 做法 |
 |---|---|
-| 想暫停一切 | 把 variable `CONDUCTOR_PAUSED` 設為 `true`。它在每一輪都是即時讀取的，所以本機的 conductor 也會在一輪之內停下來。暫停中的 conductor 不派發任何東西、不開 pull request，也不啟用 auto-merge。在它的下一輪，它還會把每個已開啟 auto-merge 的 open pull request 的 auto-merge 關掉；在那之前，這樣的 pull request 在 check 轉綠時，GitHub 仍然會自行合併它。要立刻停止，就在設定 variable 之後啟動一輪（`gh workflow run conductor.yml`），或自己把它關掉：`gh pr merge NUMBER --disable-auto`。解除暫停之後，conductor 會在適用的地方重新啟用 auto-merge。已經在執行的 session 不會因為暫停而停止。如果這個 variable 完全讀不到（網路或權限錯誤），conductor 的行為就如同被暫停 |
+| 想暫停一切 | 把 variable `CONDUCTOR_PAUSED` 設為 `true`。它在每一輪都是即時讀取的，所以本機的 conductor 也會在一輪之內停下來。暫停中的 conductor 不派發任何東西、不開 pull request，也不啟用 auto-merge。任何一個 conductor 的下一輪，包含發現本機 lease 還沒過期的 Actions 執行，還會把每個已開啟 auto-merge 的 open pull request 的 auto-merge 關掉；在那之前，這樣的 pull request 在 check 轉綠時，GitHub 仍然會自行合併它。要立刻停止，就在設定 variable 之後啟動一輪（`gh workflow run conductor.yml`），或自己把它關掉：`gh pr merge NUMBER --disable-auto`。解除暫停之後，conductor 會在適用的地方重新啟用 auto-merge。已經在執行的 session 不會因為暫停而停止。`CONDUCTOR_PAUSED`、`CONDUCTOR_BOT` 與 `CONDUCTOR_QUOTA` 會先一起讀取。只要其中任何一個讀不到（網路或權限錯誤），這一輪的行為就如同被暫停，而且仍然會撤回 auto-merge。有兩件事要分清楚：派發會立刻停止，但已經開啟的 auto-merge 只有在某一輪能列出 pull request 並成功呼叫 GitHub 時才會被撤回。如果 GitHub 的 API 完全失效，就什麼都撤回不了，這時 `gh pr merge NUMBER --disable-auto` 仍然是最後的辦法 |
 | 想知道現在的狀態 | 看 Director's brief issue，或執行 `bin/agentctl status --markdown` |
 | 想知道 conductor 接下來會做什麼 | `gh workflow run conductor.yml -f dry_run=true`，然後看執行紀錄。Dry run 不會建立任何東西。暫停期間它只顯示 `halt` |
 | 某個 story 被標上 `needs-human` | Conductor 會在 story issue 的留言裡提及人類；它不會把 issue 指派給任何人。讀 issue 上 triage 的說明與選項，做決定，然後移除 label；如果需要改 spec，就改 spec |
@@ -98,6 +98,8 @@ auto_merge_tiers = ["T0"]
 ```
 
 再過一段時間，加上 `"T1"`。修改這個檔案本身是 T2，需要你核准。
+
+GitHub 會讓 pull request 上的 auto-merge 請求在之後的 push 之後繼續留著。所以 conductor 在每一輪都會檢查每個已開啟 auto-merge 的 story pull request，只要它不再符合當初啟用的條件，就把 auto-merge 撤回。這些條件是：不是 draft、沒有等待中的人類 review、四個機械檢查與 `agent-review` 都是綠的，而且它的 tier 在 `auto_merge_tiers` 裡。等它重新符合條件時，conductor 會再啟用。在一次 push 與 conductor 的下一輪之間，這個請求仍然有效。GitHub 本身仍然要求新的 commit 通過全部五個 required check，而 `risk-gate` 會讓 T2 的 commit 失敗，直到有人核准。所以這段空窗可能放行的，是 tier 高於已啟用的分級、但低於 T2 的 commit（只啟用 T0 時的 T1），而且它還要在 conductor 執行之前通過 `ci`、`spec-verify` 與 `agent-review`。**待驗證**：GitHub 是否在 push 之後保留這個請求（[redteam-project-zh-TW.md](redteam-project-zh-TW.md) 的 D22）。
 
 ## 3. 加入一個人
 

@@ -220,7 +220,7 @@ cp docs/sprints/_template.toml docs/sprints/001.toml
 
    Fill in the three spec files (a small feature with one AC and two TCs) and the sprint file (`stories = ["001"]`). For `assignee`, leave `default` if the secrets of the person from section 6 are stored under the plain names (`DISPATCH_TOKEN`). Set it to their login only if their secrets carry the suffix (`DISPATCH_TOKEN_ALICE`): a story given to a named person uses that person's suffixed secrets and never falls back to the plain ones.
 
-   Keep the toy feature in Python. As shipped, `make test` runs Python's `unittest` over the `tests/` directory and writes the result file the gates read, so the spike needs no other test runner. A test carries its TC id in its name, for example `test_tc_001_01_says_hello`. To use another stack, first change the `project-*` targets in the `Makefile` on a `chore/` branch and merge that, so that the runner is on `main` before the story starts; red-green runs the story's tests on `main`.
+   Keep the toy feature in Python. As shipped, `make test` runs Python's `unittest` over the `tests/` directory and writes the result file the gates read, so the spike needs no other test runner. A test carries its TC id in its name, for example `test_tc_001_01_says_hello`. A test marked `expectedFailure` whose assertion fails is reported as skipped, so it never counts as a passing test case. To use another stack, first change the `project-*` targets in the `Makefile` on a `chore/` branch and merge that, so that the runner is on `main` before the story starts; red-green runs the story's tests on `main`.
 
    Then check, commit and push:
 
@@ -268,7 +268,7 @@ gh workflow run conductor.yml -f dry_run=true
 gh workflow run conductor.yml
 ```
 
-8. The conductor dispatches `design`. The agent pushes `story/001-hello`, `notify` runs, and the conductor opens the pull request as a draft. A draft only gets lint and `risk-gate`.
+8. The conductor dispatches `design`. The agent pushes `story/001-hello`, `notify` runs, and the conductor opens the pull request as a draft. On a draft, `ci` runs lint only, `risk-gate` runs, and `security` and `spec-verify` are skipped. GitHub shows a skipped check as passed; that is acceptable only because a draft cannot be merged and because marking it ready starts a full run on the same commit.
 9. `done:design`, `done:tests` and `done:impl` appear in that order. After `done:impl` the conductor marks the pull request ready, and the full gates run for the first time.
 10. `agent-review` is dispatched for the head commit and writes the status on it. A review that did not finish is published as failure, never left as a pass. If the branch moved while the review was waiting to start, that run stops without a verdict and the conductor asks for a review of the new commit.
 11. All five checks are green, and the head commit also carries a status named `risk-tier/T1` (or `T0`): that status, not the `tier:` label, is what the conductor goes by. In shadow mode the conductor notifies you that the pull request can be merged; you press merge.
