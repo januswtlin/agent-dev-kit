@@ -66,7 +66,7 @@ text = "An order that is already paid cannot be reviewed again"
 
 [[done_when]]
 text = "Every TC passes in CI"
-check = "spec-trace"
+check = "spec-verify"
 
 [[done_when]]
 text = "Deployed to staging"

@@ -190,10 +190,10 @@ PO chat：在 Claude app 開一個掛著這個 repo 的 Claude Code session，�
 gh workflow run conductor.yml -f dry_run=true
 ```
 
-3. Agent 推 `story/001-hello`，`open-pr` 開 PR，checks 開始跑。
-4. 依序出現 `done:design`、`done:tests`（此時 `red-green` 應為紅，因為還沒有實作）、`done:impl`。
+3. Agent 推 `story/001-hello`，`open-pr` 以 draft 開 PR。Draft 只跑 lint 與 `risk-gate`。
+4. 依序出現 `done:design`、`done:tests`、`done:impl`。`done:impl` 之後 conductor 把 PR 轉為可審，完整的 gate 第一次執行。
 5. `agent-review` 被派發並寫入 status。
-6. 六個 check 全綠。Shadow mode 下 conductor 通知你可以合併；你按 merge。
+6. 五個 check 全綠。Shadow mode 下 conductor 通知你可以合併；你按 merge。
 7. `evidence` 把對照表貼到 story issue。
 
 Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡與錯誤訊息：

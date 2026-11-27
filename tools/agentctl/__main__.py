@@ -82,7 +82,7 @@ def cmd_trace(args) -> int:
     story = args.story or _story_from_branch(args.branch or _current_branch())
     head = trace.parse_junit(args.junit)
     base = trace.parse_junit(args.base_junit) if args.base_junit else None
-    return _finish("spec-trace", trace.check(all_specs, head, story, base))
+    return _finish("traceability", trace.check(all_specs, head, story, base))
 
 
 def cmd_redgreen(args) -> int:

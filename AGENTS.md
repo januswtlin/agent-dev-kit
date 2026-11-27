@@ -26,11 +26,15 @@ you need is in the spec, the story issue, the branch and its commit history.
 
 ## Tests are the contract
 
-Every test case in `spec.toml` has an id like `TC-012-03`. CI enforces, mechanically:
+Every test case in `spec.toml` has an id like `TC-012-03`. The required check
+`spec-verify` enforces three things, mechanically, from the test results:
 
-- **spec-trace**: each TC id maps to at least one test that ran and passed. Put the id in the test name, for example `test_tc_012_03_rejects_oversized_file` or `it("TC-012-03 rejects an oversized file")`. Skipped tests do not count.
-- **red-green**: the story's tests must fail on `main` and pass on your branch. A test that passes without the implementation is rejected.
-- A TC that passed on `main` may not disappear.
+- **Traceability**: each TC id maps to at least one test that ran and passed. Put the id in the test name, for example `test_tc_012_03_rejects_oversized_file` or `it("TC-012-03 rejects an oversized file")`. Skipped tests do not count.
+- **Red-green**: the story's tests must fail on `main` and pass on your branch. A test that passes without the implementation is rejected.
+- **Nothing disappears**: a TC that passed on `main` must still pass.
+
+Your pull request is a draft until the impl stage is done. A draft only gets
+lint, so `spec-verify` first reports after the conductor marks it ready.
 
 So: write the test to verify the behaviour in the TC description, not to make a check pass. If a TC cannot be tested as written, do not weaken it. Report it on the story issue and stop.
 

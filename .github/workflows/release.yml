@@ -35,7 +35,7 @@ jobs:
           git fetch origin main --depth=200
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::tag is not on main"; exit 1; }
           failed="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name=="ci" or .name=="security" or .name=="spec-trace") | select(.conclusion!="success")] | length')"
+            --jq '[.check_runs[] | select(.name=="ci" or .name=="security" or .name=="spec-verify") | select(.conclusion!="success")] | length')"
           [ "$failed" = "0" ] || { echo "::error::required checks are not green on this commit"; exit 1; }
       - run: make setup && make build
 

@@ -25,4 +25,4 @@ text = ""
 
 [[done_when]]
 text = "Every TC passes in CI"
-check = "spec-trace"    # or "manual" for something a person confirms at release
+check = "spec-verify"    # or "manual" for something a person confirms at release

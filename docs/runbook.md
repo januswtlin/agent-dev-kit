@@ -190,10 +190,10 @@ Before committing to real stories, use a toy story to verify the whole path. The
 gh workflow run conductor.yml -f dry_run=true
 ```
 
-3. The agent pushes `story/001-hello`, `open-pr` opens the PR, and the checks start running.
-4. `done:design`, `done:tests` (at this point `red-green` should be red, because there is no implementation yet) and `done:impl` appear in that order.
+3. The agent pushes `story/001-hello` and `open-pr` opens the PR as a draft. A draft only gets lint and `risk-gate`.
+4. `done:design`, `done:tests` and `done:impl` appear in that order. After `done:impl` the conductor marks the PR ready, and the full gates run for the first time.
 5. `agent-review` is dispatched and writes the status.
-6. All six checks are green. In shadow mode the conductor notifies you that the PR can be merged; you press merge.
+6. All five checks are green. In shadow mode the conductor notifies you that the PR can be merged; you press merge.
 7. `evidence` posts the traceability table to the story issue.
 
 Have Claude and Codex each do the implementation once. If any step gets stuck, note where it stuck and the error message:
