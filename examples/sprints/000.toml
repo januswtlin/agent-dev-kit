@@ -1,0 +1,8 @@
+# Sprint 000 is a placeholder so the conductor has something to read on a fresh
+# repository. It contains no stories, so nothing is dispatched. Replace it with
+# the first sprint file (001.toml).
+
+goal = "Set up the pipeline"
+length_days = 7
+stories = []
+assignee = "default"

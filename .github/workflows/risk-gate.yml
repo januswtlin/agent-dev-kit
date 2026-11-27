@@ -1,0 +1,142 @@
+name: risk-gate
+
+# Reusable: called from a project's .github/workflows/agentdev-risk-gate.yml on
+# pull requests into the default branch and on submitted or dismissed reviews.
+# Required status check "risk-gate / risk-gate".
+#
+# T0 and T1 pass. T2 passes only once a human listed in [roles] humans of the base
+# branch's agentdev.toml has approved the current head commit.
+#
+# The tier is published twice. The label `tier:T?` on the pull request is for
+# people. The commit status `risk-tier/T?` on the head commit is what the
+# conductor reads when it decides whether it may merge: an agent's token can
+# edit labels, but cannot write a commit status.
+#
+# This job can write statuses and labels. Nothing from the pull request runs here:
+# its tree is checked out as data, the tools are the kit at the pinned version,
+# and the settings come from the base branch.
+
+on:
+  workflow_call:
+    inputs:
+      kit_version:
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  risk-gate:
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    env:
+      KIT_REPO: ${{ inputs.kit_repository }}
+      KIT_SHA: ${{ inputs.kit_version }}
+    steps:
+      # pull_request_review cannot be filtered by base branch in `on:`. The job must
+      # FAIL here, not be skipped: GitHub counts a skipped job as a passed required
+      # check, and the result stays on the commit if the pull request is retargeted.
+      - name: Only pull requests into the default branch are judged
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          [ "$BASE" = "$DEFAULT_BRANCH" ] || { echo "::error::this pull request targets $BASE, not $DEFAULT_BRANCH"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          path: head
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The kit, at the pinned version
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+      - name: Compute tier (settings from base)
+        id: tier
+        working-directory: head
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # The base by commit id, never by a short name: git looks origin/main up among
+          # tags first, and an agent can push a tag of any name.
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no base commit"; exit 1; }
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          # The working directory is the pull request's tree. Every Python below runs
+          # with -I so that tree cannot supply a module (agentctl.py, json.py,
+          # tomllib.py) in place of the real one.
+          AGENTCTL_TRUSTED_ROOT="$RUNNER_TEMP/base" \
+            python3 -I "$RUNNER_TEMP/kit/tools/run.py" risk --base "$BASE_SHA" --branch "$HEAD_REF" | tee "$RUNNER_TEMP/risk.json"
+          tier="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["tier"])' "$RUNNER_TEMP/risk.json")"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Risk tier: $tier"
+            python3 -I -c 'import json,sys;[print("- "+r) for r in json.load(open(sys.argv[1]))["reasons"]]' "$RUNNER_TEMP/risk.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Label the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TIER: ${{ steps.tier.outputs.tier }}
+        run: |
+          for t in T0 T1 T2; do gh label create "tier:$t" --force >/dev/null 2>&1 || true; done
+          for t in T0 T1 T2; do
+            if [ "$t" = "$TIER" ]; then gh pr edit "$PR" --add-label "tier:$t"; else gh pr edit "$PR" --remove-label "tier:$t" || true; fi
+          done
+
+      # The description names the pull request and its base: the conductor only
+      # believes a tier computed for the pull request it is deciding about.
+      - name: Record the tier on the commit, for the conductor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TIER: ${{ steps.tier.outputs.tier }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          case "$TIER" in T0|T1|T2) ;; *) echo "::error::unexpected tier: $TIER"; exit 1 ;; esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=success -f context="risk-tier/$TIER" \
+            -f description="pull request #$PR into $BASE"
+
+      # agent-review is a required status. The conductor only asks for an agent
+      # review on story branches, so everything else is settled here: documentation
+      # (T0) needs none, and any other non-story change is T2 and reviewed by a human.
+      - name: Mark agent-review as not applicable outside story branches
+        if: ${{ !startsWith(github.event.pull_request.head.ref, 'story/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=success -f context=agent-review \
+            -f description="not a story branch; no agent review required"
+
+      - name: T2 needs a human approval on the current commit
+        if: steps.tier.outputs.tier == 'T2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          humans="$(cd "$RUNNER_TEMP" && AGENTCTL_TRUSTED_ROOT="$RUNNER_TEMP/base" python3 -I "$RUNNER_TEMP/kit/tools/run.py" config roles.humans --words)"
+          [ -n "$humans" ] || { echo "::error::[roles] humans is empty in agentdev.toml on the base branch"; exit 1; }
+          approvers="$(gh pr view "$PR" --json reviews \
+            --jq "[.reviews[] | select(.state==\"APPROVED\" and .commit.oid==\"$HEAD_SHA\") | .author.login] | unique | .[]")"
+          for h in $humans; do
+            if echo "$approvers" | grep -qx "$h"; then echo "approved by $h"; exit 0; fi
+          done
+          echo "::error::T2 change: waiting for approval from one of: $humans"
+          exit 1

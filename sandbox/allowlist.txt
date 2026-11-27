@@ -1,0 +1,19 @@
+# Hosts every agent sandbox may reach. Everything else is denied.
+# Package registries are in allowlist-build.txt and go to building stages only.
+# One host per line. Keep this list short: every entry is a place data can be sent.
+
+# Source control
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+
+# Model providers (the harnesses' own traffic)
+api.anthropic.com
+claude.ai
+api.openai.com
+chatgpt.com
+auth.openai.com
+
+# Ollama on the host is reached through the VM's host gateway, not through this list.

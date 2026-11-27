@@ -1,0 +1,226 @@
+# Defaults for every project that uses the kit. A project's agentdev.toml
+# overrides any of these: tables merge key by key, and a value (a list included)
+# replaces the default as a whole. Read by `agentctl` from the kit itself, so a
+# project cannot change what its own file leaves out.
+
+[kit]
+# The kit version this project uses: a full commit SHA of the kit repository.
+# The installed `agentctl` launcher runs this version, read from the default
+# branch; the caller workflows in .github/workflows must use the same SHA.
+version = ""
+# Where the kit's reusable workflows are called from.
+repository = "januswtlin/agent-dev-kit"
+
+[paths]
+specs = "docs/specs"
+sprints = "docs/sprints"
+roadmap = "docs/product/roadmap.md"
+product = "docs/product"
+design = "docs/design"
+
+[stories]
+# Story ids are this many digits: story 012, AC-012-1, TC-012-01, branch story/012-slug.
+id_digits = 3
+# The language the director approves stories in, as story-<lang>.md next to story.md.
+# Empty: story.md only.
+translation = "zh-TW"
+max_lines = 80
+
+[docs]
+# Every <name>.md has a <name>-<lang>.md with the same headings. Empty: no check.
+translation = ""
+# Documents that must exist (in both languages, when translation is set).
+required = []
+
+[tests]
+# Run in a clean checkout before the tests (the red-green check tests the base
+# branch that way). Must leave the checkout able to run test_cmd.
+setup_cmd = ""
+# Must run every test, write JUnit XML where junit_glob finds it, and exit
+# non-zero when a test fails.
+test_cmd = "make test"
+# Static checks, run by agents before they push and by CI.
+lint_cmd = "make lint"
+junit_glob = "reports/junit/*.xml"
+# Files the red-green check copies onto the base commit, besides any file that
+# mentions the story's TC ids.
+test_paths = ["tests/**", "**/tests/**", "**/__tests__/**", "**/*_test.*", "**/*.test.*", "**/*.spec.*", "**/test_*.py"]
+
+# --- Risk tiers ---------------------------------------------------------------
+#   T0  documentation only            -> merges when checks are green
+#   T1  code change within a story    -> merges when checks and agent review pass
+#   T2  anything listed under [risk.t2] -> needs a human approval
+# Whatever a project sets, .github/** and agentdev.toml are always guardrails.
+
+[risk.thresholds]
+max_changed_lines = 600
+max_changed_files = 40
+# Lock files and generated files do not count towards the size limits.
+ignore_for_size = ["**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock", "**/bun.lockb", "**/uv.lock", "**/poetry.lock", "**/Cargo.lock", "**/go.sum", "**/*.lock", "**/*.lockfile"]
+
+[risk.t0]
+# A change is T0 only when every changed file matches one of these.
+# Tests are deliberately not T0: weakening a test is a behaviour change.
+paths = ["docs/**", "**/*.md", "LICENSE"]
+
+[risk.t2]
+# The guardrails: an agent must never be able to loosen its own limits.
+guardrails = [
+  ".github/**",
+  "agentdev.toml",
+  ".claude/**",
+  ".codex/**",
+  "AGENTS.md",
+  "CLAUDE.md",
+  # Configuration that the scanners in the security check read from the tree.
+  ".gitleaks.toml",
+  ".gitleaksignore",
+  ".semgrepignore",
+  ".semgrep.yml",
+  ".semgrep/**",
+  ".gitattributes",
+]
+# Approved by the product owner: specs, sprints, product documents.
+human_gated = ["docs/specs/**", "docs/sprints/**", "docs/product/**"]
+# Project-specific high-risk code. Set this for the project's own layout.
+high_risk = [
+  "**/auth/**",
+  "**/payments/**",
+  "**/billing/**",
+  "**/migrations/**",
+  "infra/**",
+  "**/*.tf",
+  "**/Dockerfile",
+  "**/docker-compose*.yml",
+]
+# A new or changed dependency is always reviewed by a human (supply chain, slopsquatting).
+dependency_manifests = [
+  "**/package.json",
+  "**/pyproject.toml",
+  "**/requirements*.txt",
+  "**/go.mod",
+  "**/Cargo.toml",
+  "**/Gemfile",
+  "**/pom.xml",
+  "**/build.gradle*",
+  # Lock files change what is installed just as much as the manifests do.
+  "**/package-lock.json",
+  "**/pnpm-lock.yaml",
+  "**/yarn.lock",
+  "**/uv.lock",
+  "**/poetry.lock",
+  "**/Cargo.lock",
+  "**/go.sum",
+  "**/Gemfile.lock",
+  # Any other lock file, whatever the package manager: bun.lock, composer.lock,
+  # Pipfile.lock, pdm.lock, mix.lock, flake.lock, gradle.lockfile, ...
+  "**/*.lock",
+  "**/*.lockb",
+  "**/*.lockfile",
+  "**/npm-shrinkwrap.json",
+  "**/Package.resolved",
+  "**/Package.swift",
+  "**/go.work",
+  "**/go.work.sum",
+  "**/*.sum",
+  "**/*.resolved",
+  "**/packages.lock.json",
+  "**/composer.json",
+  "**/Pipfile",
+  "**/setup.py",
+  "**/setup.cfg",
+  "**/mix.exs",
+  "**/deno.json",
+  "**/*.csproj",
+  "**/flake.nix",
+  # Where packages are fetched from.
+  "**/.npmrc",
+  "**/.yarnrc*",
+  "**/pip.conf",
+  "**/.pypirc",
+]
+
+# --- Conductor ------------------------------------------------------------------
+# The kill switch is not here: set the repository variable CONDUCTOR_PAUSED=true.
+
+[conductor]
+# Stories in progress at once. Stories waiting on a human do not use a slot.
+wip_limit = 2
+# Fuses for unattended operation.
+max_prs_per_day = 10
+max_attempts = 2      # dispatches of the same stage before a triage session is asked
+max_fix_rounds = 3    # fix -> review loops before a human is asked
+max_triage = 1        # triage sessions per story before a human is asked
+# Unapproved spec pull requests the product owner agent may leave waiting for you.
+max_open_spec_prs = 3
+# Share of the sprint merged at which the planner drafts the next sprint.
+draft_next_sprint_at = 0.8
+# Exits to a person: a story that is stuck goes to `needs-human` (or, while it
+# already waits on one, is mentioned again) instead of waiting unnoticed.
+max_parked_hours = 72          # waiting for a dependency triage added
+max_dispatches_per_story = 15  # sessions of every stage together
+remind_after_hours = 48        # a story waiting on a person is mentioned again
+# Tiers the conductor may merge on its own. Empty means shadow mode: every gate is
+# computed and reported, but a human presses merge. T2 is never allowed here.
+auto_merge_tiers = []
+
+[conductor.stage_timeout_minutes]
+default = 90
+design = 45
+review = 45
+triage = 30
+product-owner = 60
+
+# GitHub Actions budget, estimated by `agentctl budget` for the daily brief.
+# overflow_runner is EMPTY on purpose: the jobs it would take execute pull request
+# code, so that runner must be dedicated, hold no credentials, and be recreated
+# for every job. Prices and the allowance change; check GitHub's billing pages.
+[conductor.actions]
+monthly_allowance_usd = 18.0          # GitHub Team
+overflow_at = 0.85
+hosted_runner = "ubuntu-latest"
+overflow_runner = []
+light_labels = ["ubuntu-slim"]
+
+[conductor.actions.price_per_minute]
+standard = 0.006
+light = 0.002
+arm = 0.005
+
+# --- Roles ------------------------------------------------------------------------
+
+[roles]
+# GitHub logins of the people who approve product decisions (specs, sprints).
+directors = []
+# Everyone whose approval counts for a T2 change. Directors are included.
+humans = []
+# Harness that drafts specs and sprints when no developer is implied.
+planner = "claude"
+
+# How each harness is started:
+#   via = "http"     POST to a cloud scheduled task's API trigger
+#   via = "comment"  post a mention that starts a cloud task
+#   via = "sbx"      a fresh clone-mode Docker Sandbox on the Mac that runs the conductor
+[roles.harness.claude]
+# Reviews run as a workflow job, so the job itself sets the agent-review status.
+review_workflow = "agentdev-agent-review.yml"
+via = "http"
+url_env = "CLAUDE_TRIGGER_URL"
+token_env = "CLAUDE_TRIGGER_TOKEN"
+
+[roles.harness.codex]
+via = "comment"
+mention = "@codex"
+token_env = "DISPATCH_TOKEN"
+
+[roles.harness.ollama]
+via = "sbx"
+
+# For every stage, harnesses are tried in order. `default` covers a story with no
+# assignee and anyone not listed; add [roles.developers.<login>.stages] per person.
+[roles.developers.default.stages]
+design = ["claude"]
+tests = ["claude"]
+impl = ["claude", "codex"]
+review = ["codex", "claude"]
+triage = ["claude"]

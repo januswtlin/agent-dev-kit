@@ -1,0 +1,107 @@
+name: brief
+
+# Reusable: called from a project's .github/workflows/agentdev-brief.yml on a
+# schedule (`secrets: inherit`). Director's brief: a daily status on one fixed
+# issue, plus a weekly audit digest.
+# The numbers come from `agentctl status` and the GitHub API, not from an agent's
+# account of its own work.
+
+on:
+  workflow_call:
+    inputs:
+      kit_version:
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
+      weekly:
+        description: Add the weekly audit
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  brief:
+    # Skipped until the Conductor GitHub App is configured.
+    if: vars.CONDUCTOR_APP_ID != ''
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    # The App key is a secret of this environment, usable from the default branch only.
+    environment: conductor
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The kit, at the pinned version
+        env:
+          KIT_REPO: ${{ inputs.kit_repository }}
+          KIT_SHA: ${{ inputs.kit_version }}
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+          echo "$RUNNER_TEMP/kit/bin" >> "$GITHUB_PATH"
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.CONDUCTOR_APP_ID }}
+          private-key: ${{ secrets.CONDUCTOR_APP_PRIVATE_KEY }}
+      - name: Actions budget
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: agentctl budget | tee budget.txt
+      - name: Build the brief
+        env:
+          CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
+          WEEKLY: ${{ inputs.weekly }}
+        run: |
+          since="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
+          [ "$WEEKLY" = "true" ] && since="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "# Director's brief $(date -u +%Y-%m-%d)"
+            echo
+            agentctl status --markdown
+            head -1 budget.txt
+            echo
+            echo "### Waiting for your review"
+            gh pr list --search "review-requested:@me is:open" --json number,title \
+              --jq '.[] | "- #\(.number) \(.title)"' 2>/dev/null || true
+            gh pr list --state open --label "tier:T2" --json number,title --jq '.[] | "- #\(.number) \(.title) (T2)"'
+            echo
+            echo "### Needs a decision"
+            gh issue list --state open --label needs-human --json number,title --jq '.[] | "- #\(.number) \(.title)"'
+            echo
+            echo "### Merged since $since"
+            gh pr list --state merged --search "merged:>=$since" --limit 100 --json number,title,labels \
+              --jq '.[] | "- #\(.number) \(.title) [\([.labels[].name | select(startswith("tier:"))] | join(","))]"'
+          } > brief.md
+          if [ "$WEEKLY" = "true" ]; then
+            {
+              echo
+              echo "## Weekly audit"
+              gh pr list --state merged --search "merged:>=$since" --limit 200 --json number,title,labels \
+                | python3 -I "$RUNNER_TEMP/kit/scripts/weekly-audit.py"
+              echo "- Escalations opened: $(gh issue list --state all --label needs-human --search "created:>=$since" --json number --jq length)"
+            } >> brief.md
+          fi
+          cat brief.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Post on the brief issue
+        run: |
+          gh label create directors-brief --force >/dev/null 2>&1 || true
+          issue="$(gh issue list --label directors-brief --state open --limit 1 --json number --jq '.[0].number')"
+          if [ -z "$issue" ]; then
+            gh issue create --title "Director's brief" --label directors-brief --body "Daily status and weekly audit. Subscribe to this issue for notifications."
+            issue="$(gh issue list --label directors-brief --state open --limit 1 --json number --jq '.[0].number')"
+          fi
+          gh issue comment "$issue" --body-file brief.md

@@ -1,0 +1,234 @@
+name: ci
+
+# Reusable: called from a project's .github/workflows/agentdev-ci.yml, which runs it
+# on pull requests into the default branch and on pushes to it. The job names are
+# required status checks; GitHub names them "<caller job> / <job>", so with the
+# caller's job called `ci`: "ci / ci" and "ci / spec-verify".
+#
+# Minutes matter (every job is billed rounded up to a whole minute), so:
+#   - a draft pull request only gets lint; the full run happens when it is marked ready
+#   - the test suite runs once on head, plus once on base for a story branch, in ONE job
+#   - judging happens in a second, tiny job that executes no pull request code
+#
+# `ci` runs pull request code with a read-only token and no secrets. Its runner
+# comes from vars.CI_RUNNER, which `agentctl budget` changes only when an overflow
+# runner is configured; none is by default, because that runner must be dedicated,
+# hold no credentials and be recreated for every job. `spec-verify` never moves: a
+# machine that ran the pull request's code must not be the one that judges it.
+#
+# The kit's tools come from the kit itself, at the version the caller passes in
+# `kit_version`, never from the project. `agentctl pins` (in lint) checks that it
+# is the version agentdev.toml pins and the one in the caller's `uses:`.
+
+on:
+  workflow_call:
+    inputs:
+      kit_version:
+        description: Full commit SHA of the kit; the same as in the caller's `uses:`
+        type: string
+        required: true
+      kit_repository:
+        type: string
+        default: januswtlin/agent-dev-kit
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 45
+    env:
+      FULL: ${{ github.event_name == 'push' || github.event.pull_request.draft == false }}
+      HEAD_REF: ${{ github.head_ref }}
+      BASE_REF: ${{ github.base_ref }}
+      KIT_REPO: ${{ inputs.kit_repository }}
+      KIT_SHA: ${{ inputs.kit_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        if: runner.environment == 'github-hosted'
+        with:
+          python-version: "3.12"
+      - name: The kit, at the pinned version
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+          echo "$RUNNER_TEMP/kit/bin" >> "$GITHUB_PATH"
+      - name: Setup
+        run: |
+          cmd="$(agentctl config tests.setup_cmd)"
+          [ -z "$cmd" ] || bash -c "$cmd"
+      - name: Lint
+        run: |
+          agentctl spec-lint
+          agentctl docs-lint
+          agentctl codeowners --check
+          agentctl pins
+          cmd="$(agentctl config tests.lint_cmd)"
+          [ -z "$cmd" ] || bash -c "$cmd"
+      - name: Both language versions of a story change together
+        if: github.event_name == 'pull_request'
+        run: agentctl spec-lint --base "refs/remotes/origin/$BASE_REF"
+
+      - name: Tests on head
+        id: tests
+        if: env.FULL == 'true'
+        continue-on-error: true
+        run: bash -c "$(agentctl config tests.test_cmd)"
+      - name: Collect the test results
+        if: env.FULL == 'true'
+        run: agentctl collect-junit --out "$RUNNER_TEMP/results/junit"
+      - name: Tests on base with this branch's test files (story branches)
+        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        run: agentctl redgreen-collect --base "refs/remotes/origin/$BASE_REF" --out "$RUNNER_TEMP/results/base-overlay" --branch "$HEAD_REF"
+      - name: Always leave a result file, so a missing artifact means a broken run
+        if: env.FULL == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/results/junit"
+          [ -n "$(ls -A "$RUNNER_TEMP/results/junit")" ] || echo '<testsuites/>' > "$RUNNER_TEMP/results/junit/none.xml"
+      - uses: actions/upload-artifact@v4
+        if: env.FULL == 'true'
+        with:
+          name: junit
+          path: ${{ runner.temp }}/results/
+          retention-days: 90
+      - name: Fail when tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
+
+  spec-verify:
+    # Traceability and red-green, judged from the result files with the kit at the
+    # pinned version and the base branch's agentdev.toml. Nothing from the pull
+    # request is executed here.
+    #
+    # The result files were produced by a job that ran the pull request's code, so
+    # they are untrusted input. The order of the steps is part of the defence:
+    #   1. the artifact is unpacked in the runner's temp directory, outside both checkouts
+    #   2. only plain *.xml files and collected.json are copied on; a symbolic link fails the job
+    #   3. the pull request's tree is checked out (for its specs), then the base branch
+    #      LAST, into a directory nothing earlier could have prepared
+    needs: ci
+    if: always() && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_REF: ${{ github.head_ref }}
+      BASE_REF: ${{ github.base_ref }}
+      KIT_REPO: ${{ inputs.kit_repository }}
+      KIT_SHA: ${{ inputs.kit_version }}
+      CALLER_REF: ${{ github.workflow_ref }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: junit
+          path: ${{ runner.temp }}/artifact
+      - name: Results of the newest runs on the base branch that have any
+        if: github.event_name == 'pull_request'
+        run: |
+          # The caller's workflow file, whose runs on the base branch hold the results.
+          workflow="$(basename "${CALLER_REF%@*}")"
+          # Up to five runs, whatever they concluded: a test case that passed in any of
+          # them must still pass. Insisting on a green run would make a red main
+          # impossible to repair; taking only the newest would let one partial run on
+          # main make older coverage forgettable.
+          # "No results" has to be told apart from "could not find out": an artifact
+          # that is absent or expired is skipped, a failed listing or download is an error.
+          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASE_REF" --event push \
+            --status completed --limit 30 --json databaseId --jq '.[].databaseId')"
+          found=0
+          for id in $ids; do
+            [ "$found" -lt 5 ] || break
+            state="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts" \
+              --jq '[.artifacts[] | select(.name == "junit")] | if length == 0 then "none" elif .[0].expired then "expired" else "present" end')" \
+              || { echo "::error::cannot list the artifacts of run $id on $BASE_REF"; exit 1; }
+            [ "$state" = "present" ] || continue
+            gh run download "$id" --repo "$GITHUB_REPOSITORY" -n junit -D "$RUNNER_TEMP/main-artifact/$id" \
+              || { echo "::error::run $id on $BASE_REF has results but they could not be downloaded"; exit 1; }
+            # Only a run whose results can be read counts towards the five: malformed
+            # reports must not push older usable ones out.
+            if ! python3 -I - "$RUNNER_TEMP/main-artifact/$id/junit" <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          base = sys.argv[1]
+          names = sorted(os.listdir(base)) if os.path.isdir(base) else []
+          for name in names:
+              path = os.path.join(base, name)
+              if name.endswith(".xml") and os.path.isfile(path) and not os.path.islink(path):
+                  try:
+                      if any(True for _ in ET.parse(path).getroot().iter("testcase")):
+                          sys.exit(0)
+                  except ET.ParseError:
+                      pass
+          sys.exit(1)
+          PY
+            then
+              echo "::warning::run $id on $BASE_REF has no readable test results; not counted"
+              rm -rf "$RUNNER_TEMP/main-artifact/$id"
+              continue
+            fi
+            found=$((found + 1))
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::no ci run on $BASE_REF has results (a new project, or they expired); nothing to compare against"
+          else
+            echo "comparing against $found run(s) on $BASE_REF"
+          fi
+      - name: Keep only plain result files
+        run: |
+          RESULTS="$RUNNER_TEMP/results"
+          rm -rf "$RESULTS"; mkdir -p "$RESULTS/junit" "$RESULTS/base-overlay" "$RESULTS/main"
+          keep() {  # keep SOURCE_DIR DESTINATION_DIR
+            [ -d "$1" ] || return 0
+            if [ -n "$(find "$1" -type l -print -quit)" ]; then echo "::error::$1 contains a symbolic link"; exit 1; fi
+            find "$1" -maxdepth 1 -type f \( -name '*.xml' -o -name 'collected.json' \) -exec cp -- {} "$2/" \;
+          }
+          keep "$RUNNER_TEMP/artifact/junit" "$RESULTS/junit"
+          keep "$RUNNER_TEMP/artifact/base-overlay" "$RESULTS/base-overlay"
+          for run in "$RUNNER_TEMP"/main-artifact/*/; do
+            [ -d "$run" ] || continue
+            mkdir -p "$RESULTS/main/$(basename "$run")"
+            keep "${run}junit" "$RESULTS/main/$(basename "$run")"
+          done
+      - uses: actions/checkout@v4
+        with:
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The kit, at the pinned version
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::kit_version must be a full commit SHA"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/kit"
+          curl -sSfL "https://codeload.github.com/$KIT_REPO/tar.gz/$KIT_SHA" | tar -xz -C "$RUNNER_TEMP/kit" --strip-components=1
+      # The judge is the kit, started with -I: `python3 -m` would put the working
+      # directory (the pull request's tree) first on the import path. Its settings
+      # come from the base branch's agentdev.toml.
+      - name: Traceability
+        working-directory: head
+        env:
+          AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
+        run: |
+          RESULTS="$RUNNER_TEMP/results"
+          set -- --junit "$RESULTS/junit/*.xml"
+          [ -n "$(ls -A "$RESULTS/main")" ] && set -- "$@" --base-junit "$RESULTS/main/*/*.xml"
+          [ -n "$HEAD_REF" ] && set -- "$@" --branch "$HEAD_REF"
+          python3 -I "$RUNNER_TEMP/kit/tools/run.py" trace "$@"
+      - name: Red-green
+        if: github.event_name == 'pull_request'
+        working-directory: head
+        env:
+          AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
+        run: python3 -I "$RUNNER_TEMP/kit/tools/run.py" redgreen-judge --base-dir "$RUNNER_TEMP/results/base-overlay" --junit "$RUNNER_TEMP/results/junit/*.xml" --branch "$HEAD_REF"

@@ -1,0 +1,26 @@
+name: kit-ci
+
+# The kit's own checks. The other workflows in this directory are reusable ones
+# that projects call; this one is not.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Linters
+        run: python3 -m pip install --quiet pyflakes shellcheck-py actionlint-py
+      - run: make lint
+      - run: make test

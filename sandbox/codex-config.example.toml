@@ -1,0 +1,32 @@
+# Codex CLI settings for this project. Codex reads ~/.codex/config.toml, so copy
+# the parts you need there (inside the sandbox VM, not on the host).
+#
+# VERIFY against the current Codex documentation before relying on it; option
+# names have changed between releases.
+
+# --- Inside the sandbox VM -----------------------------------------------------
+# The VM is the boundary, so Codex itself runs without its own sandbox.
+[profiles.vm]
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+
+# --- Exception: directly on the host ---------------------------------------------
+# Only for short interactive sessions. Codex's own sandbox limits writes to the
+# workspace and turns the network off, but it does not stop reads of your home
+# directory. Prefer the VM.
+[profiles.host]
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[sandbox_workspace_write]
+network_access = false
+
+# --- Local models through Ollama ---------------------------------------------------
+# Ollama runs on the host (it needs the GPU); the VM reaches it on port 11434.
+# Use: codex exec --oss --model devstral "..."
+# Raise the context window in Ollama (for example OLLAMA_CONTEXT_LENGTH=32768);
+# with the small default an agent silently loses the start of its instructions.
+oss_provider = "ollama"
+
+# AGENTS.md is the instruction file for every harness in this repository.
+project_doc_fallback_filenames = ["CLAUDE.md"]

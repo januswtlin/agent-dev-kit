@@ -1,0 +1,77 @@
+# Machine-readable half of the story, in English. Approved together with
+# story.md (English, what agents build from) and story-zh-TW.md (what the director reads).
+# The scheduler reads the first block; the trace and red-green checks read ac/tc.
+
+id = "000"
+slug = "example"
+title = "Pay by bank transfer with proof of payment"
+
+priority = 1            # lower runs earlier
+size = "M"              # S | M | L. Split anything larger than L.
+risk = "T2"             # payments: a human approves the implementation PR
+depends_on = []         # story ids that must be merged first
+touches = ["orders", "payments", "db:orders", "storage:proofs"]
+
+[[ac]]
+id = "AC-000-1"
+text = "A customer can choose bank transfer for an order awaiting payment and upload one proof"
+
+[[ac]]
+id = "AC-000-2"
+text = "The shop owner can view the proof and mark it passed; the order becomes paid"
+
+[[ac]]
+id = "AC-000-3"
+text = "The shop owner can reject the proof with a reason; the customer can upload again"
+
+[[ac]]
+id = "AC-000-4"
+text = "Only the owner of that shop can view and review the proof"
+
+[[tc]]
+id = "TC-000-01"
+ac = ["AC-000-1"]
+level = "integration"
+text = "Uploading a proof to an order awaiting payment moves it to awaiting review"
+
+[[tc]]
+id = "TC-000-02"
+ac = ["AC-000-1"]
+level = "unit"
+text = "A file that is not an image or PDF, or is over 10 MB, is refused and the order does not change"
+
+[[tc]]
+id = "TC-000-03"
+ac = ["AC-000-2"]
+level = "integration"
+text = "After the owner passes it, the order is paid and the reviewer and time are recorded"
+
+[[tc]]
+id = "TC-000-04"
+ac = ["AC-000-3"]
+level = "integration"
+text = "Rejecting needs a reason; afterwards the order awaits payment and the customer can upload again"
+
+[[tc]]
+id = "TC-000-05"
+ac = ["AC-000-4"]
+level = "integration"
+text = "Another shop's owner and an ordinary customer are refused when they try to view the proof"
+
+[[tc]]
+id = "TC-000-06"
+ac = ["AC-000-2"]
+level = "unit"
+text = "An order that is already paid cannot be reviewed again"
+
+[[done_when]]
+text = "Every TC passes in CI"
+check = "spec-verify"
+
+[[done_when]]
+text = "Deployed to staging"
+check = "deploy-staging"
+
+[[done_when]]
+text = "The owner has walked through one pass and one rejection on staging"
+check = "manual"

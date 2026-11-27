@@ -1,0 +1,63 @@
+name: release
+
+# Production deploys happen only from a v* tag, and only humans can create v*
+# tags (the `tags` ruleset: only admins touch any tag). Pushing the tag is the release approval.
+#
+# This file belongs to the project, not to the kit: deploying is the project's own
+# business. It is a starting point; the check names below are the kit's required
+# checks as GitHub reports them.
+#
+# There are no long-lived cloud keys anywhere. The job exchanges a GitHub OIDC
+# token for short-lived credentials, and the cloud side must only trust
+#   repo:<owner>/<repo>:ref:refs/tags/v*
+# so no branch build and no agent session can obtain production access.
+#
+# TEMPLATE: fill in the provider block once the deployment platform is chosen.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  checks: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tagged commit must be on main and green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main --depth=200
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::tag is not on main"; exit 1; }
+          # Each named check must be PRESENT and green. Counting failures alone would
+          # also pass a commit on which the checks never ran.
+          runs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --jq '.check_runs[] | "\(.name) \(.conclusion)"')"
+          for name in "ci / ci" "security / security" "ci / spec-verify"; do
+            if ! printf '%s\n' "$runs" | grep -qx "$name success"; then
+              echo "::error::check '$name' did not succeed on this commit"; exit 1
+            fi
+            if printf '%s\n' "$runs" | grep "^$name " | grep -qv " success$"; then
+              echo "::error::check '$name' also has a run that is not green on this commit"; exit 1
+            fi
+          done
+      - run: echo "build the release here"
+
+      # --- AWS example -------------------------------------------------------
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: arn:aws:iam::<account>:role/release
+      #     aws-region: <region>
+      # - run: ./deploy.sh production
+
+      - name: Deploy
+        run: echo "No deployment target configured yet."
