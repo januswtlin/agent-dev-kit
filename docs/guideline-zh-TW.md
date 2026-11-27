@@ -45,7 +45,7 @@ Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設
 
 雲端 session（Claude Code on the web、Codex cloud）是廠商管理的 VM，完全碰不到你的筆電，是隱私上最強的隔離，也是筆電闔上時唯一能繼續工作的地方。環境的網路設為受限，不放任何 secret。
 
-### Mac 上的衛生規則
+### Mac 上的 hygiene rules
 
 `bin/agentctl doctor` 會檢查其中可以檢查的項目。
 
@@ -59,13 +59,13 @@ Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設
 
 ### Story agent 與維護工作
 
-Agent 在這個 repo 裡有兩種角色，護欄對兩者的要求不同。
+Agent 在這個 repo 裡有兩種角色，guardrail 對兩者的要求不同。
 
-**Story agent** 由 conductor 派工，無人看管。它不得編輯護欄路徑。這條規則有兩層：硬性的是 CODEOWNERS 與 token 權限；軟性的是 `sandbox/story-agent.claude-settings.json` 裡的 deny rules，安裝在 VM 內的使用者層設定與雲端環境，只對 story agent 生效。
+**Story agent** 由 conductor 派工，無人看管。它不得編輯 guardrail 路徑。這條規則有兩層：硬性的是 CODEOWNERS 與 token 權限；軟性的是 `sandbox/story-agent.claude-settings.json` 裡的 deny rules，安裝在 VM 內的使用者層設定與雲端環境，只對 story agent 生效。
 
 **維護工作**是你在 session 裡直接要求 agent 修改 pipeline 本身（workflow、policy、工具、prompt）。這是允許的，條件是由人類當面提出、在 `chore/` branch 上進行、PR 由人類核准。派工的 prompt、issue、檔案內容都不算這種要求。
 
-Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的規則：不讀寫 home、不 force push、不碰雲端 CLI、不自行開 PR 或合併。早期版本把禁止編輯護欄路徑的規則也放在共用設定裡，結果連受你指示的維護工作都被擋住，包括修正這個設定本身。
+Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的規則：不讀寫 home、不 force push、不碰雲端 CLI、不自行開 PR 或合併。早期版本把禁止編輯 guardrail 路徑的規則也放在共用設定裡，結果連受你指示的維護工作都被擋住，包括修正這個設定本身。
 
 ### 身分與 token
 
@@ -97,7 +97,7 @@ Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的�
 | `security` | secret 掃描、靜態分析 | 程式 |
 | `spec-verify` | Traceability：每個核准的 test case 都對應到實際執行且通過的測試，已通過的不得消失。Red-green：story 的測試在 main 上會失敗、在 branch 上通過 | 程式 |
 | `risk-gate` | 風險分級；T2 需要人類對目前的 commit 核准 | 程式 + 人 |
-| `agent-review` | 不同 agent 對實作與測試忠實度的審查 | Agent |
+| `agent-review` | 由另一個 agent 審查實作，並檢查測試是否真的驗到所描述的行為 | Agent |
 
 `spec-verify` 與 `risk-gate` 執行時使用 **base branch 的工具與 policy**，所以一個 PR 無法修改審判自己的規則。`spec-verify` 本身不執行任何 PR 的程式碼：測試在 `ci` job 裡跑，結果以檔案交給 `spec-verify` 判定。
 
@@ -109,7 +109,7 @@ Story 的 PR 以 draft 開啟。Draft 只跑 lint；實作 stage 完成後 condu
 
 - **T0** 純文件。Checks 綠即可。
 - **T1** 屬於某個已核准 story 的程式變更。Checks 與 agent review 通過即可。
-- **T2** 需要人類核准。包括：護欄本身（`.github/`、`policy/`、`tools/`、`prompts/` 等）、spec 與 sprint、高風險程式路徑（auth、付款、migration、infra）、任何依賴的新增或變更、超過大小門檻的 diff、不屬於任何 story 的程式變更。
+- **T2** 需要人類核准。包括：guardrail 本身（`.github/`、`policy/`、`tools/`、`prompts/` 等）、spec 與 sprint、高風險程式路徑（auth、付款、migration、infra）、任何依賴的新增或變更、超過大小門檻的 diff、不屬於任何 story 的程式變更。
 
 測試檔不算 T0。削弱一個測試就是行為變更。
 
@@ -120,7 +120,7 @@ Story 的 PR 以 draft 開啟。Draft 只跑 lint；實作 stage 完成後 condu
 1. **Traceability。** 測試名稱必須帶 TC ID。CI 讀測試執行器輸出的 JUnit XML，確認每個 ID 都有至少一個實際執行且通過的測試。被 skip 的、不存在的、只寫在註解裡的都不算。依據是執行結果，不是搜尋原始碼。
 2. **Red-green。** 把 PR 的測試檔疊到 main 上執行，必須失敗；在 PR 上必須通過。`assert True` 這種空測試在 main 上就會通過，因而被擋下。
 3. **不得消失。** 在 main 上通過的 TC，之後不能不見。Spec 本身受 CODEOWNERS 保護，agent 不能悄悄刪掉一條 TC。
-4. **忠實度稽核。** 審查 agent（不同於寫測試與寫實作的 agent）對每個 TC 逐條判斷：測試的斷言是否真的驗證了描述的行為。這層補的是前三層看不到的情況：測試存在、會紅會綠，但驗的是錯的東西。
+4. **測試有效性的稽核。** 審查 agent（不同於寫測試與寫實作的 agent）對每個 TC 逐條判斷：測試的斷言是否真的驗證了描述的行為。這層補的是前三層看不到的情況：測試存在、會紅會綠，但驗的是錯的東西。
 
 前三層由 `spec-verify` 這一個 check 執行。
 
@@ -185,9 +185,9 @@ Conductor 是決定性的程式，不是 agent，所以在你的 Mac 上直接�
 
 - **你在電腦前**：`bin/agentctl conductor here`。它每三分鐘輪詢一次，每次都從 `origin/main` 讀取核准的 sprint、spec 與 policy，不讀你工作目錄裡的內容。
 - **你要外出**：`bin/agentctl conductor away`，或直接按 Ctrl-C。交給 GitHub Actions。
-- **你忘了交接就闔上筆電**：本機 conductor 每次執行都會更新一個租約。Actions 每四小時的排程執行會檢查它，超過 20 分鐘沒更新就自動接手。
+- **你忘了交接就闔上筆電**：本機 conductor 每次執行都會更新一個 lease。Actions 每四小時的排程執行會檢查它，超過 20 分鐘沒更新就自動接手。
 
-兩個 repo variable 確保同一時間只有一邊在動作：`CONDUCTOR_HOME`（`local` 或 `actions`）與 `CONDUCTOR_LEASE`。本機持有租約期間，Actions 上由事件觸發的執行會被跳過，不耗分鐘。
+兩個 repo variable 確保同一時間只有一邊在動作：`CONDUCTOR_HOME`（`local` 或 `actions`）與 `CONDUCTOR_LEASE`。本機持有 lease 期間，Actions 上由事件觸發的執行會被跳過，不耗分鐘。
 
 在 Actions 上，事件是主要驅動（`ci` 完成、PR 關閉、review 送出、issue 的 label 變更），排程只負責抓停滯與漏接。本機執行時用的是你自己的 `gh` 登入；派工需要的觸發網址與 token 放在 `.env.conductor`（已列入 `.gitignore`）。
 
@@ -217,7 +217,7 @@ Conductor 是決定性的程式，不是 agent，所以在你的 Mac 上直接�
 - 某個 harness 額度用盡時改用 fallback，都用盡就等待。
 - 所有 gate 通過後啟用 auto-merge，但只限 `policy/conductor.toml` 的 `auto_merge_tiers` 所列的分級。
 
-### 保險絲
+### Fuses
 
 - **Kill switch**：把 repo variable `CONDUCTOR_PAUSED` 設為 `true`，下一次執行起停止一切派發。
 - 上限：同時進行的 story 數、每日開啟的 PR 數、同一 stage 的重試次數、fix 與 review 的來回輪數、triage 次數。超過就升級給你，不會無限重試。
@@ -242,9 +242,9 @@ GitHub 以金額計算額度，Team 方案每月 $18。標準 Linux runner 每�
 
 T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分鐘按單價折算。**這些都是估算，還沒有實測。** Runbook 的 spike 會要你記下實際數字。
 
-**溢出到 self-hosted。** `agentctl budget` 從 Actions 的 job 紀錄估算當月用量（每日的 brief 與 conductor 的排程執行都會跑）。達到額度的 85% 時，它把 repo variable `CI_RUNNER` 改指向你 Mac 上 VM 內的 runner，新的月份開始時改回來。門檻、單價、額度都在 `policy/conductor.toml`。
+**overflow 到 self-hosted。** `agentctl budget` 從 Actions 的 job 紀錄估算當月用量（每日的 brief 與 conductor 的排程執行都會跑）。達到額度的 85% 時，它把 repo variable `CI_RUNNER` 改指向你 Mac 上 VM 內的 runner，新的月份開始時改回來。門檻、單價、額度都在 `policy/conductor.toml`。
 
-只有 `ci` 與 `security` 會移過去，因為它們是執行 PR 程式碼的重型 job。負責判定的 job 永遠留在 GitHub-hosted runner：self-hosted runner 不會在每個 job 之間重建，被 PR 程式碼碰過的機器不能拿來判定它自己。溢出期間若 Mac 闔上，這兩個 check 會排隊，conductor 把它們視為進行中而等待。
+只有 `ci` 與 `security` 會移過去，因為它們是執行 PR 程式碼的重型 job。負責判定的 job 永遠留在 GitHub-hosted runner：self-hosted runner 不會在每個 job 之間重建，被 PR 程式碼碰過的機器不能拿來判定它自己。overflow 期間若 Mac 闔上，這兩個 check 會排隊，conductor 把它們視為進行中而等待。
 
 ### Agent 在哪裡跑
 
@@ -269,7 +269,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 你看兩個地方：
 
 - **Director's brief**：一個固定的 issue，每天更新。內容是 sprint 進度、等你決定的事、被卡住的項目、新合併的項目，以及當月 Actions 用量的估算與 conductor 目前在哪裡跑。每週一多一段稽核：各分級的合併數、revert 數、升級次數，以及隨機抽出的幾個未經人類合併的 PR 供你抽查。數字來自 GitHub，不來自 agent 的自述。
-- **GitHub 的通知**：要你 review 的 PR 與 assign 給你的 issue，就是你的決策佇列。
+- **GitHub 的通知**：要你 review 的 PR 與 assign 給你的 issue，就是等你決定的事項清單。
 
 ## 8. 分階段開啟自動合併
 
@@ -283,9 +283,9 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 
 **已在開發時驗證：**
 
-- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、租約判定，共 81 個單元測試。
+- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 81 個單元測試。
 - Red-green 在一個真實的 git repo 上端對端執行，分成收集與判定兩步：空測試被擋下，改成真的測試後通過；沒有執行收集步驟時判定為失敗而非通過。
-- Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、留 marker、把 draft 轉為可審、單一動作失敗不影響其他動作；租約有效時 Actions 端不動作、過期時接手；用量達門檻時改寫 `CI_RUNNER`。
+- Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、留 marker、把 draft 轉為可審、單一動作失敗不影響其他動作；lease 有效時 Actions 端不動作、過期時接手；用量達門檻時改寫 `CI_RUNNER`。
 - Workflow 通過 actionlint，shell script 通過 shellcheck，指令攔截 hook 有測試。
 
 **尚未驗證，需要在你的帳號與機器上做（runbook 的 spike 與 red-team checklist）：**
@@ -311,7 +311,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - 你貼進 PO chat 或 issue 的內容會進入廠商的 context，不在隔離範圍內。
 - 雙語 story 的語意一致性沒有硬性保證。你核准的中文與 agent 實作的英文若有出入，只有 review agent 與你自己能發現。
 - 測試結果由 PR 的程式碼產生，可以被偽造。見第 4 節。
-- Actions 用量是估算。它可能與帳單有出入，溢出的時機因此可能偏早或偏晚。
+- Actions 用量是估算。它可能與帳單有出入，overflow 的時機因此可能偏早或偏晚。
 - `touches` 是預測，會漏判。代價是合併衝突與重工，由 triage 事後修正；不會導致錯誤的程式被合併。
 - 持續運轉的產能受訂閱額度限制。額度用盡時工作會變慢，不會失敗。
 - 雲端觸發依賴兩家仍在演進的功能。退路是 self-hosted runner，但它需要 Mac 開機。

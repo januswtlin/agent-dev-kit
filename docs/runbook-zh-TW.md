@@ -76,7 +76,7 @@ make lint && make test
 | Variable | `CONDUCTOR_QUOTA` | JSON，例如 `{"januswtlin/codex": 1795800000}`，值為額度恢復的 epoch 秒 | 手動標記某個 harness 額度用盡 |
 | Variable | `OLLAMA_MODEL` | 例如 `devstral` | 使用 Ollama 時 |
 | Variable | `LIGHT_RUNNER` | 1-core runner 的 label **待驗證**；不設則用 `ubuntu-latest` | 想降低輕量 job 的費用時 |
-| Variable | `CI_RUNNER` | 由 `agentctl budget` 自動維護，不需手動設定 | 額度溢出 |
+| Variable | `CI_RUNNER` | 由 `agentctl budget` 自動維護，不需手動設定 | 額度 overflow |
 | Variable | `CONDUCTOR_HOME`、`CONDUCTOR_LEASE`、`ACTIONS_USAGE` | 由 `agentctl` 自動維護 | Conductor 的位置與用量估算 |
 
 `CLAUDE_CODE_OAUTH_TOKEN` 綁定你個人的訂閱。`policy/roles.toml` 已設定成只有你名下的 story 會用到 Claude。
@@ -147,7 +147,7 @@ gh auth setup-git && git config --global user.name "yourname-agent" && git confi
 
 把 `codex/config.example.toml` 的 `vm` profile 複製到 VM 內的 `~/.codex/config.toml`。
 
-把 story agent 專用的 deny rules 安裝為 VM 內的使用者層設定。這組規則禁止編輯護欄路徑與已核准的 spec，只該對 story agent 生效，所以不放在 repo 共用的設定裡：
+把 story agent 專用的 deny rules 安裝為 VM 內的使用者層設定。這組規則禁止編輯 guardrail 路徑與已核准的 spec，只該對 story agent 生效，所以不放在 repo 共用的設定裡：
 
 ```bash
 mkdir -p ~/.claude && cp /workspace/sandbox/story-agent.claude-settings.json ~/.claude/settings.json
@@ -251,7 +251,7 @@ bin/agentctl conductor here
 bin/agentctl conductor away
 ```
 
-忘了交接也沒關係，租約 20 分鐘沒更新，Actions 的排程執行會自動接手。查看目前在哪裡：
+忘了交接也沒關係，lease 20 分鐘沒更新，Actions 的排程執行會自動接手。查看目前在哪裡：
 
 ```bash
 bin/agentctl conductor status

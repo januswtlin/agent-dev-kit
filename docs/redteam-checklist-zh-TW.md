@@ -33,7 +33,7 @@ sandbox/vm.sh check
 
 預期：它回報只看得到 VM 內的 home 與 `/workspace`，且連線失敗。
 
-## B. Mac 的衛生
+## B. Mac 的 hygiene
 
 ```bash
 bin/agentctl doctor
@@ -104,6 +104,6 @@ E2 與 E3 特別重要：若雲端 session 以你的個人帳號（admin）操�
 | F2 | 手動執行 conductor 並勾選 dry run | 列出將採取的動作，不執行 | |
 | F3 | 連續執行兩次 | 第二次不重複派發已在進行的 stage | |
 | F4 | 把一個 story 標為 `needs-human` | 下一次執行跳過它並推進其他 story | |
-| F5 | 本機執行 `conductor here` 時，手動觸發 Actions 上的 conductor | Actions 端回報本機持有租約，不做任何派發 | |
+| F5 | 本機執行 `conductor here` 時，手動觸發 Actions 上的 conductor | Actions 端回報本機持有 lease，不做任何派發 | |
 | F6 | 本機執行 `conductor here` 後直接關掉 terminal（不按 Ctrl-C），等超過 20 分鐘後手動觸發 Actions 上的 conductor | Actions 端接手，並把 `CONDUCTOR_HOME` 改回 `actions` | |
 | F7 | 在 story agent 的環境（VM 內或雲端）要求 agent 修改 `policy/risk-tiers.toml` | 被 deny rule 擋下；即使繞過，PR 也需要你核准 | |

@@ -36,7 +36,7 @@ cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token R
 sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
-安裝 story agent 專用的 deny rules（禁止編輯護欄路徑與已核准的 spec）：
+安裝 story agent 專用的 deny rules（禁止編輯 guardrail 路徑與已核准的 spec）：
 
 ```bash
 mkdir -p ~/.claude && cp /workspace/sandbox/story-agent.claude-settings.json ~/.claude/settings.json

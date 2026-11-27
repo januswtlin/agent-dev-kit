@@ -12,7 +12,7 @@
 | Mac 上工作目錄以外的檔案 | 被刪除或覆寫 | 靠備份 |
 | 暫時有效的雲端 CLI token | 在有效期間被用來操作雲端資源 | 視操作而定 |
 | Repo 的歷史與 main | 被改寫，或被合入有問題的程式 | 是（git），但代價高 |
-| 護欄本身（workflow、policy、spec） | 被削弱後，其他防線失效 | 是，前提是有人發現 |
+| guardrail 本身（workflow、policy、spec） | 被削弱後，其他防線失效 | 是，前提是有人發現 |
 | 訂閱帳號的登入狀態 | 被竊取 | 可撤銷 |
 | 未來的 production 與資料庫 | 被刪除或外洩 | 否 |
 
@@ -28,7 +28,7 @@
 | 6 | Agent 直接 push main、force push、刪 branch | Ruleset：main 只能經 PR；agent 是 Write 權限的 machine user，沒有 bypass | guard hook；deny rules |
 | 7 | Agent 修改 CI 讓檢查通過 | Agent token 沒有 Workflows 權限；`.github/` 在 CODEOWNERS；檢查使用 base branch 的工具與 policy | AGENTS.md 第 3 條 |
 | 8 | Agent 削弱風險規則、prompt 或工具 | `policy/`、`prompts/`、`tools/` 在 CODEOWNERS，且為 T2 | 同上 |
-| 9 | Agent 聲稱寫了測試但沒有，或寫了空測試 | `spec-verify`：traceability（依執行結果）與 red-green | 審查 agent 的忠實度稽核 |
+| 9 | Agent 聲稱寫了測試但沒有，或寫了空測試 | `spec-verify`：traceability（依執行結果）與 red-green | 審查 agent 對測試有效性的稽核 |
 | 10 | Agent 修改或刪除測試來遷就實作 | Spec 受 CODEOWNERS 保護；已通過的 TC 不得消失；red-green | 審查 agent 逐一檢查測試階段之後的測試變更 |
 | 11 | Agent 悄悄更改需求 | `docs/specs/` 在 CODEOWNERS；新的 push 使舊核准失效 | |
 | 12 | Agent 核准或合併自己的 PR | Agent 帳號不是 code owner；PR 由 Conductor App 開啟；App 不能核准 | deny rules 擋 `gh pr merge` |
@@ -42,9 +42,9 @@
 | 20 | Computer use、瀏覽器擴充、個人資料 connector 碰到私人資料 | 無。這些路徑不經過 VM | 規則：不開啟。見 guideline 3 |
 | 21 | Agent 直接寫出假的測試結果檔，騙過 `spec-verify` | 無。測試結果本來就由 PR 的程式碼產生 | `Makefile` 受 CODEOWNERS 保護；審查 agent；每週抽查 |
 | 22 | 雙語 story 的兩份語意不同：你核准的中文與 agent 實作的英文有出入 | 結構一致與同步變更由 `spec-lint` 強制 | PO 自我比對；另一廠商的 review agent 逐條比對 |
-| 23 | PR 的程式碼在 self-hosted runner 上留下東西，影響之後的 job | 負責判定的 job 永遠在 GitHub-hosted runner 上；溢出的只有 `ci` 與 `security` | Runner 在 VM 內 |
-| 24 | 維護用的 session 被誘導去削弱護欄 | 護欄路徑的變更一律需要人類核准才能合併 | AGENTS.md 第 3 條：只有人類在 session 中直接提出才算維護要求 |
-| 25 | Actions 額度被耗盡，gate 無法執行 | 額度用完時 PR 無法合併，不會在沒有 gate 的情況下合併 | 用量估算、溢出到 self-hosted、每日 brief |
+| 23 | PR 的程式碼在 self-hosted runner 上留下東西，影響之後的 job | 負責判定的 job 永遠在 GitHub-hosted runner 上；overflow 的只有 `ci` 與 `security` | Runner 在 VM 內 |
+| 24 | 維護用的 session 被誘導去削弱 guardrail | guardrail 路徑的變更一律需要人類核准才能合併 | AGENTS.md 第 3 條：只有人類在 session 中直接提出才算維護要求 |
+| 25 | Actions 額度被耗盡，gate 無法執行 | 額度用完時 PR 無法合併，不會在沒有 gate 的情況下合併 | 用量估算、overflow 到 self-hosted、每日 brief |
 
 ## 參考事故
 
