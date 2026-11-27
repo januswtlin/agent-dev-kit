@@ -1,0 +1,12 @@
+# Copy to docs/sprints/NNN.toml. The highest-numbered file on main is the active sprint.
+# Approving the pull request that adds this file starts the sprint.
+
+goal = ""               # one sentence the director would recognise
+length_days = 7         # used by the planner to size the sprint
+
+# Story ids, each with an approved spec in docs/specs/. Order here is for the
+# reader; the conductor orders by each spec's priority, depends_on and touches.
+stories = []
+
+# Developer (GitHub login) whose subscriptions run a story that has no assignee.
+assignee = "default"

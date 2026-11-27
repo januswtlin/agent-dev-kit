@@ -1,0 +1,46 @@
+name: evidence
+
+# After a story merges, post the AC -> TC -> test -> result table on the story
+# issue. This is what the director reads instead of the code.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  evidence:
+    if: github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'story/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make setup
+      - run: make test || true
+      - name: Post the evidence table
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          story="$(printf '%s' "$HEAD_REF" | sed -E 's#^story/([0-9]{3}).*#\1#')"
+          bin/agentctl evidence "$story" --junit 'reports/junit/*.xml' > evidence.md
+          echo "" >> evidence.md
+          echo "Merged in #$PR." >> evidence.md
+          issue="$(gh issue list --label "story:$story" --state all --limit 1 --json number --jq '.[0].number')"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body-file evidence.md
+            gh label create "stage:merged" --force >/dev/null 2>&1 || true
+            gh issue edit "$issue" --add-label "stage:merged"
+          else
+            cat evidence.md >> "$GITHUB_STEP_SUMMARY"
+          fi

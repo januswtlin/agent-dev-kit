@@ -1,0 +1,63 @@
+# Who does what. Read by `agentctl reconcile`.
+#
+# Each developer's stories run on that developer's own subscriptions.
+# For every stage, harnesses are tried in order; a harness whose quota is
+# exhausted is skipped until its window resets. The reviewer is chosen to
+# differ from the implementer whenever the list allows it.
+
+# GitHub logins that count as humans for approvals and escalations.
+humans = ["januswtlin"]
+
+# Harness that drafts sprints and specs when no developer is implied.
+planner = "claude"
+
+# --- How each harness is started -------------------------------------------
+# via = "http"     POST to a cloud scheduled task's API trigger (laptop can be closed)
+# via = "comment"  post a mention that starts a cloud task (laptop can be closed)
+# via = "workflow" run .github/workflows/agent-job.yml (self-hosted runner in the sandbox VM)
+#
+# Which of these work with your accounts is settled by the spike in docs/runbook.md.
+# If a cloud path does not work, switch that harness to via = "workflow".
+
+[harness.claude]
+# Reviews run as a workflow job so the job itself sets the agent-review status.
+review_workflow = "agent-review.yml"
+via = "http"
+url_env = "CLAUDE_TRIGGER_URL"
+token_env = "CLAUDE_TRIGGER_TOKEN"
+
+[harness.codex]
+via = "comment"
+mention = "@codex"
+token_env = "DISPATCH_TOKEN"
+
+[harness.ollama]
+via = "workflow"
+
+# --- Developers ---------------------------------------------------------------
+# Keys are GitHub logins. `default` is used for a story with no assignee.
+
+# Claude Max + ChatGPT Plus. Implementation is the most token-hungry stage, so it
+# runs on Claude; Codex reviews, which costs far less and keeps the review cross-vendor.
+[developers.januswtlin.stages]
+design = ["claude"]
+tests = ["claude"]
+impl = ["claude", "codex"]
+review = ["codex", "claude"]
+triage = ["claude"]
+
+# ChatGPT Pro only: every stage is a separate, fresh Codex session.
+# Replace the key with the second developer's GitHub login.
+[developers.developer-two.stages]
+design = ["codex"]
+tests = ["codex"]
+impl = ["codex"]
+review = ["codex"]
+triage = ["codex"]
+
+[developers.default.stages]
+design = ["claude"]
+tests = ["claude"]
+impl = ["claude", "codex"]
+review = ["codex", "claude"]
+triage = ["claude"]

@@ -1,0 +1,76 @@
+name: brief
+
+# Director's brief: a daily status on one fixed issue, plus a weekly audit digest.
+# The numbers come from `agentctl status` and the GitHub API, not from an agent's
+# account of its own work.
+
+on:
+  schedule:
+    - cron: "43 23 * * *"   # daily, 07:43 Asia/Taipei
+    - cron: "7 1 * * 1"     # weekly digest, Monday 09:07 Asia/Taipei
+  workflow_dispatch:
+    inputs:
+      weekly:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  brief:
+    # Skipped until the conductor GitHub App is configured (docs/runbook.md, section 2.2).
+    if: vars.CONDUCTOR_APP_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the brief
+        env:
+          CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
+          WEEKLY: ${{ github.event.schedule == '7 1 * * 1' || inputs.weekly }}
+        run: |
+          since="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
+          [ "$WEEKLY" = "true" ] && since="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "# Director's brief $(date -u +%Y-%m-%d)"
+            echo
+            bin/agentctl status --markdown
+            echo "### Waiting for your review"
+            gh pr list --search "review-requested:@me is:open" --json number,title \
+              --jq '.[] | "- #\(.number) \(.title)"' 2>/dev/null || true
+            gh pr list --state open --label "tier:T2" --json number,title --jq '.[] | "- #\(.number) \(.title) (T2)"'
+            echo
+            echo "### Needs a decision"
+            gh issue list --state open --label needs-human --json number,title --jq '.[] | "- #\(.number) \(.title)"'
+            echo
+            echo "### Merged since $since"
+            gh pr list --state merged --search "merged:>=$since" --limit 100 --json number,title,labels \
+              --jq '.[] | "- #\(.number) \(.title) [\([.labels[].name | select(startswith("tier:"))] | join(","))]"'
+          } > brief.md
+          if [ "$WEEKLY" = "true" ]; then
+            {
+              echo
+              echo "## Weekly audit"
+              gh pr list --state merged --search "merged:>=$since" --limit 200 --json number,title,labels \
+                | python3 scripts/weekly-audit.py
+              echo "- Escalations opened: $(gh issue list --state all --label needs-human --search "created:>=$since" --json number --jq length)"
+            } >> brief.md
+          fi
+          cat brief.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Post on the brief issue
+        run: |
+          gh label create directors-brief --force >/dev/null 2>&1 || true
+          issue="$(gh issue list --label directors-brief --state open --limit 1 --json number --jq '.[0].number')"
+          if [ -z "$issue" ]; then
+            gh issue create --title "Director's brief" --label directors-brief --body "Daily status and weekly audit. Subscribe to this issue for notifications."
+            issue="$(gh issue list --label directors-brief --state open --limit 1 --json number --jq '.[0].number')"
+          fi
+          gh issue comment "$issue" --body-file brief.md

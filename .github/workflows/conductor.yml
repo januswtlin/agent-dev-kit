@@ -1,0 +1,66 @@
+name: conductor
+
+# The reconciler. Stateless: every run observes GitHub and dispatches whatever
+# should happen next. Runs on events for fast reaction and hourly as a heartbeat
+# that catches stalls and missed events.
+#
+# Kill switch: set the repository variable CONDUCTOR_PAUSED to true.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the actions without executing them
+        type: boolean
+        default: false
+  pull_request:
+    types: [closed, labeled]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [labeled, unlabeled]
+  check_suite:
+    types: [completed]
+  push:
+    branches: [main]
+    paths: ["docs/sprints/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conductor
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    # Skipped until the conductor GitHub App is configured (docs/runbook.md, section 2.2).
+    if: vars.CONDUCTOR_APP_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.CONDUCTOR_APP_ID }}
+          private-key: ${{ secrets.CONDUCTOR_APP_PRIVATE_KEY }}
+      # Always the default branch: the conductor never runs code from a pull request.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Reconcile
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
+          CONDUCTOR_QUOTA: ${{ vars.CONDUCTOR_QUOTA }}
+          CLAUDE_TRIGGER_URL: ${{ secrets.CLAUDE_TRIGGER_URL }}
+          CLAUDE_TRIGGER_TOKEN: ${{ secrets.CLAUDE_TRIGGER_TOKEN }}
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then bin/agentctl reconcile --dry-run; else bin/agentctl reconcile; fi

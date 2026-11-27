@@ -1,0 +1,11 @@
+# The contract between this pipeline and the project's technology stack.
+# The pipeline only calls these commands; what they do is up to the project.
+
+# Must run every test and write JUnit XML to the location matched by junit_glob.
+# Must exit non-zero when a test fails.
+test_cmd = "make test"
+junit_glob = "reports/junit/*.xml"
+
+# Files the red-green check copies onto the base commit, in addition to any
+# file that mentions the story's TC ids.
+test_paths = ["tests/**", "**/tests/**", "**/__tests__/**", "**/*_test.*", "**/*.test.*", "**/*.spec.*", "**/test_*.py"]

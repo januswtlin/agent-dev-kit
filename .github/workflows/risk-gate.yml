@@ -1,0 +1,82 @@
+name: risk-gate
+
+# Required status check: risk-gate.
+# T0 and T1 pass. T2 passes only once a human listed in policy/roles.toml has
+# approved the current head commit. Re-runs when a review is submitted.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  risk-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compute tier (tooling and policy from base)
+        id: tier
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git worktree add --detach ../base "origin/$BASE_REF"
+          AGENTCTL_TRUSTED_ROOT="$GITHUB_WORKSPACE/../base" PYTHONPATH=../base/tools \
+            python3 -m agentctl risk --base "origin/$BASE_REF" --branch "$HEAD_REF" | tee risk.json
+          echo "tier=$(python3 -c 'import json;print(json.load(open("risk.json"))["tier"])')" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Risk tier: $(python3 -c 'import json;print(json.load(open("risk.json"))["tier"])')"
+            python3 -c 'import json;[print("- "+r) for r in json.load(open("risk.json"))["reasons"]]'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Label the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          TIER: ${{ steps.tier.outputs.tier }}
+        run: |
+          for t in T0 T1 T2; do gh label create "tier:$t" --force >/dev/null 2>&1 || true; done
+          for t in T0 T1 T2; do
+            if [ "$t" = "$TIER" ]; then gh pr edit "$PR" --add-label "tier:$t"; else gh pr edit "$PR" --remove-label "tier:$t" || true; fi
+          done
+
+      # agent-review is a required status. The conductor only asks for an agent
+      # review on story branches, so everything else is settled here: documentation
+      # (T0) needs none, and any other non-story change is T2 and reviewed by a human.
+      - name: Mark agent-review as not applicable outside story branches
+        if: ${{ !startsWith(github.event.pull_request.head.ref, 'story/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=success -f context=agent-review \
+            -f description="not a story branch; no agent review required"
+
+      - name: T2 needs a human approval on the current commit
+        if: steps.tier.outputs.tier == 'T2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          humans="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("../base/policy/roles.toml","rb"))["humans"]))')"
+          approvers="$(gh pr view "$PR" --json reviews \
+            --jq "[.reviews[] | select(.state==\"APPROVED\" and .commit.oid==\"$HEAD_SHA\") | .author.login] | unique | .[]")"
+          for h in $humans; do
+            if echo "$approvers" | grep -qx "$h"; then echo "approved by $h"; exit 0; fi
+          done
+          echo "::error::T2 change: waiting for approval from one of: $humans"
+          exit 1

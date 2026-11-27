@@ -1,0 +1,31 @@
+# Conductor limits. Read by `agentctl reconcile`.
+# The kill switch is not here: set the repository variable CONDUCTOR_PAUSED=true
+# and every run stops before dispatching anything.
+
+# Stories in progress at once. Stories waiting on a human do not use a slot.
+wip_limit = 2
+
+# Fuses for unattended operation.
+max_prs_per_day = 10
+max_attempts = 2      # dispatches of the same stage before a triage session is asked
+max_fix_rounds = 3    # fix -> review loops before a human is asked
+max_triage = 1        # triage sessions per story before a human is asked
+
+# Unapproved spec pull requests the product owner agent may leave waiting for you.
+max_open_spec_prs = 3
+
+# Share of the sprint merged at which the planner drafts the next sprint.
+draft_next_sprint_at = 0.8
+
+# Tiers the conductor may merge on its own. Empty means shadow mode: every gate
+# is computed and reported, but a human presses merge. Turn on "T0", then "T1",
+# once the gates have agreed with your own judgement for a while.
+# T2 always needs a human approval and is never listed here.
+auto_merge_tiers = []
+
+[stage_timeout_minutes]
+default = 90
+design = 45
+review = 45
+triage = 30
+product-owner = 60

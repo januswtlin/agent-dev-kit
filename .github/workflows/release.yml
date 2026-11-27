@@ -1,0 +1,50 @@
+name: release
+
+# Production deploys happen only from a v* tag, and only humans can create v*
+# tags (.github/rulesets/release-tags.json). Pushing the tag is the release approval.
+#
+# There are no long-lived cloud keys anywhere. The job exchanges a GitHub OIDC
+# token for short-lived credentials, and the cloud side must only trust
+#   repo:<owner>/<repo>:ref:refs/tags/v*
+# so no branch build and no agent session can obtain production access.
+#
+# TEMPLATE: fill in the provider block once the deployment platform is chosen.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tagged commit must be on main and green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main --depth=200
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::tag is not on main"; exit 1; }
+          failed="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name=="ci" or .name=="security" or .name=="spec-trace") | select(.conclusion!="success")] | length')"
+          [ "$failed" = "0" ] || { echo "::error::required checks are not green on this commit"; exit 1; }
+      - run: make setup && make build
+
+      # --- AWS example -------------------------------------------------------
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: arn:aws:iam::<account>:role/release
+      #     aws-region: <region>
+      # - run: make deploy ENV=production
+
+      - name: Deploy
+        run: echo "No deployment target configured yet. See docs/guideline.md, Production."

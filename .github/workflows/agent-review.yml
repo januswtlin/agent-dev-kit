@@ -1,0 +1,99 @@
+name: agent-review
+
+# Sets the required commit status `agent-review`.
+#
+# Two sources, both outside the implementing agent's reach (its token has no
+# permission to write commit statuses or to change this file):
+#   claude  runs here as a job, started by the conductor
+#   bridge  converts a review posted by a trusted review bot (for example the
+#           Codex cloud GitHub integration) into the status
+#
+# VERIFY IN THE SPIKE: the inputs of anthropics/claude-code-action and the login
+# and review format of the Codex review bot.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      story:
+        description: Story id
+        required: true
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+
+jobs:
+  claude:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve the pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+        run: echo "sha=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          fetch-depth: 0
+      - name: Mark pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/${{ steps.pr.outputs.sha }}" \
+            -f state=pending -f context=agent-review -f description="review in progress"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Follow prompts/review.md exactly. Read AGENTS.md first.
+            Story: ${{ inputs.story }}. Pull request: #${{ inputs.pr }}. Base: origin/main.
+            Write your verdict to review-verdict.json and your findings to review-findings.md
+            in the repository root. Do not commit or push anything.
+          claude_args: "--max-turns 60"
+      - name: Publish verdict
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          STORY: ${{ inputs.story }}
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          verdict="$(python3 -c 'import json;print(json.load(open("review-verdict.json")).get("verdict",""))' 2>/dev/null || true)"
+          [ -f review-findings.md ] && gh pr comment "$PR" --body-file review-findings.md
+          if [ "$verdict" = "pass" ]; then state=success; desc="review passed"; else state=failure; desc="review requested changes or did not finish"; fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" -f context=agent-review -f description="$desc"
+          # Tell the conductor the review stage has reported, whatever the verdict.
+          issue="$(gh issue list --label "story:$STORY" --state all --limit 1 --json number --jq '.[0].number')"
+          gh label create "done:review" --force >/dev/null 2>&1 || true
+          [ -n "$issue" ] && gh issue edit "$issue" --add-label "done:review"
+
+  bridge:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      contains(fromJSON(vars.REVIEW_BOTS || '[]'), github.event.review.user.login)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Convert the bot review into the agent-review status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.review.commit_id }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          BODY: ${{ github.event.review.body }}
+        run: |
+          if [ "$REVIEW_STATE" = "approved" ] || printf '%s' "$BODY" | grep -qi 'agent-review: *pass'; then
+            state=success; desc="review bot approved"
+          else
+            state=failure; desc="review bot requested changes"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" -f context=agent-review -f description="$desc"

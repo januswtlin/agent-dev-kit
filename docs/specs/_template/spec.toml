@@ -1,0 +1,28 @@
+# Copy this folder to docs/specs/NNN-slug/ and fill it in.
+# Check with: bin/agentctl spec-lint
+
+id = "NNN"              # three digits, same as the folder prefix
+slug = "short-name"     # the branch will be story/NNN-short-name
+title = ""
+
+# Scheduling. The conductor runs exactly what is written here.
+priority = 100          # lower runs earlier
+size = "M"              # S | M | L. Split anything larger.
+risk = "T1"             # T2 for auth, payments, migrations, infrastructure
+depends_on = []         # story ids that must be merged first
+touches = []            # modules and shared resources, e.g. ["orders", "db:orders"]
+
+[[ac]]
+id = "AC-NNN-1"
+text = ""
+
+[[tc]]
+id = "TC-NNN-01"
+ac = ["AC-NNN-1"]
+level = "unit"          # unit | integration | e2e
+text = ""
+# red_exempt = true     # only for a test that legitimately passes before the change
+
+[[done_when]]
+text = "所有 TC 在 CI 通過"
+check = "spec-trace"    # or "manual" for something a person confirms at release

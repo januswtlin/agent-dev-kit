@@ -1,0 +1,66 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/**)",
+      "Edit(~/**)",
+      "Read(//Users/**)",
+      "Edit(//Users/**)",
+      "Read(//etc/**)",
+      "Edit(.github/**)",
+      "Edit(policy/**)",
+      "Edit(tools/**)",
+      "Edit(bin/**)",
+      "Edit(scripts/**)",
+      "Edit(sandbox/**)",
+      "Edit(prompts/**)",
+      "Edit(.claude/**)",
+      "Edit(codex/**)",
+      "Edit(AGENTS.md)",
+      "Edit(CLAUDE.md)",
+      "Edit(Makefile)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git tag:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh api --method DELETE:*)",
+      "Bash(sudo:*)",
+      "Bash(aws:*)",
+      "Bash(gcloud:*)",
+      "Bash(az:*)",
+      "Bash(terraform:*)",
+      "Bash(kubectl:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": ["~/"],
+      "allowRead": ["."]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
+      ]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.sh" }
+        ]
+      }
+    ]
+  }
+}

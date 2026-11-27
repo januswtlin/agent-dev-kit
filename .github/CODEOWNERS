@@ -1,0 +1,31 @@
+# Paths that need a human approval before merge. Enforced by the `main` ruleset
+# (require_code_owner_review). Everything not listed here can merge on green gates.
+#
+# Keep in sync with policy/risk-tiers.toml ([t2] guardrails, human_gated, high_risk).
+# Agents use a separate machine account, which must never be listed as an owner.
+
+# Product decisions: specs, sprints, product documents.
+/docs/specs/        @januswtlin
+/docs/sprints/      @januswtlin
+/docs/product/      @januswtlin
+
+# The guardrails themselves.
+/.github/           @januswtlin
+/policy/            @januswtlin
+/tools/             @januswtlin
+/bin/               @januswtlin
+/scripts/           @januswtlin
+/sandbox/           @januswtlin
+/prompts/           @januswtlin
+/.claude/           @januswtlin
+/codex/             @januswtlin
+/AGENTS.md          @januswtlin
+/CLAUDE.md          @januswtlin
+/Makefile           @januswtlin
+
+# High-risk code. Adjust once the code layout exists.
+**/auth/**          @januswtlin
+**/payments/**      @januswtlin
+**/billing/**       @januswtlin
+**/migrations/**    @januswtlin
+/infra/             @januswtlin

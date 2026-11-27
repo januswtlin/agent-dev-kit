@@ -1,0 +1,76 @@
+# Machine-readable half of the story. Approved together with story.md.
+# The scheduler reads the first block; the trace and red-green checks read ac/tc.
+
+id = "000"
+slug = "example"
+title = "轉帳付款並上傳憑證"
+
+priority = 1            # lower runs earlier
+size = "M"              # S | M | L. Split anything larger than L.
+risk = "T2"             # payments: a human approves the implementation PR
+depends_on = []         # story ids that must be merged first
+touches = ["orders", "payments", "db:orders", "storage:proofs"]
+
+[[ac]]
+id = "AC-000-1"
+text = "顧客可為待付款訂單選擇轉帳付款並上傳一張憑證"
+
+[[ac]]
+id = "AC-000-2"
+text = "商店負責人可檢視憑證並標記通過，訂單變為已付款"
+
+[[ac]]
+id = "AC-000-3"
+text = "商店負責人可退回憑證並附原因，顧客可重新上傳"
+
+[[ac]]
+id = "AC-000-4"
+text = "只有該商店的負責人能檢視與審核憑證"
+
+[[tc]]
+id = "TC-000-01"
+ac = ["AC-000-1"]
+level = "integration"
+text = "待付款訂單上傳憑證後，狀態變為待審核"
+
+[[tc]]
+id = "TC-000-02"
+ac = ["AC-000-1"]
+level = "unit"
+text = "非圖片或超過 10MB 的檔案被拒絕，訂單狀態不變"
+
+[[tc]]
+id = "TC-000-03"
+ac = ["AC-000-2"]
+level = "integration"
+text = "負責人標記通過後，訂單變為已付款並記錄審核者與時間"
+
+[[tc]]
+id = "TC-000-04"
+ac = ["AC-000-3"]
+level = "integration"
+text = "退回時必須填原因；退回後訂單回到待付款，顧客可再次上傳"
+
+[[tc]]
+id = "TC-000-05"
+ac = ["AC-000-4"]
+level = "integration"
+text = "其他商店的負責人與一般顧客檢視憑證時得到拒絕"
+
+[[tc]]
+id = "TC-000-06"
+ac = ["AC-000-2"]
+level = "unit"
+text = "已付款的訂單不能再次審核"
+
+[[done_when]]
+text = "所有 TC 在 CI 通過"
+check = "spec-trace"
+
+[[done_when]]
+text = "已部署到 staging"
+check = "deploy-staging"
+
+[[done_when]]
+text = "負責人在 staging 上實際走過一次通過與退回流程"
+check = "manual"

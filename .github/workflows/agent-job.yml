@@ -1,0 +1,56 @@
+name: agent-job
+
+# Runs one pipeline stage on a self-hosted runner that lives INSIDE the sandbox VM
+# on a developer's Mac (see sandbox/runner/). Jobs queue on GitHub and are picked
+# up whenever that machine is online; nobody has to start them by hand.
+#
+# This is the supplementary path. Cloud sessions are the primary one, because
+# they keep working with the laptop closed. Ollama stages always come here.
+#
+# The runner is logged in to Claude Code and Codex with the developer's own
+# subscription. It holds the agent token only: no workflow, admin or status scope.
+
+on:
+  workflow_dispatch:
+    inputs:
+      story:
+        required: true
+      stage:
+        required: true
+      harness:
+        description: claude | codex | ollama
+        required: true
+      prompt:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-job-${{ inputs.story }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: [self-hosted, agent-sandbox]
+    timeout-minutes: 120
+    env:
+      PROMPT: ${{ inputs.prompt }}
+      HARNESS: ${{ inputs.harness }}
+      GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
+      OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || 'devstral' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_TOKEN }}
+      - name: Refuse to run outside the sandbox
+        run: bin/agentctl doctor --inside
+      - name: Run the stage
+        run: |
+          case "$HARNESS" in
+            claude) claude -p "$PROMPT" --permission-mode bypassPermissions ;;
+            codex)  codex exec --sandbox danger-full-access "$PROMPT" ;;
+            ollama) codex exec --oss --model "$OLLAMA_MODEL" --sandbox danger-full-access "$PROMPT" ;;
+            *) echo "unknown harness $HARNESS"; exit 1 ;;
+          esac

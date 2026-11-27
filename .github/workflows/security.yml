@@ -1,0 +1,42 @@
+name: security
+
+# Required status check: security.
+# New or changed dependencies are not judged here; they are routed to a human
+# by the risk gate (policy/risk-tiers.toml, dependency_manifests).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.21.2"
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan (gitleaks)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          if [ -n "$BASE_REF" ]; then
+            /tmp/gitleaks git --redact --log-opts="origin/${BASE_REF}..HEAD" .
+          else
+            /tmp/gitleaks git --redact --log-opts="-1" .
+          fi
+
+      - name: Static analysis (semgrep)
+        run: |
+          python3 -m pip install --quiet semgrep
+          semgrep scan --config auto --error --quiet --exclude tools/tests

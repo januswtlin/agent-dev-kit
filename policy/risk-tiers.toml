@@ -1,0 +1,63 @@
+# Risk tiers. Read by `agentctl risk` in the risk-gate workflow.
+#
+#   T0  documentation only            -> merges when checks are green
+#   T1  code change within a story    -> merges when checks and agent review pass
+#   T2  anything listed under [t2]    -> needs a human approval
+#
+# Changing this file is itself T2 (see guardrails) and human-gated by the ruleset.
+# Keep the high_risk and guardrails lists in sync with .github/rulesets/main.json.
+
+[thresholds]
+max_changed_lines = 600
+max_changed_files = 40
+# Lock files and generated files do not count towards the size limits.
+ignore_for_size = ["**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/uv.lock", "**/poetry.lock", "**/Cargo.lock", "**/go.sum"]
+
+[t0]
+# A change is T0 only when every changed file matches one of these.
+# Tests are deliberately not T0: weakening a test is a behaviour change.
+paths = ["docs/**", "**/*.md", "LICENSE"]
+
+[t2]
+# The guardrails themselves. An agent must never be able to loosen its own limits.
+guardrails = [
+  ".github/**",
+  "policy/**",
+  "tools/**",
+  "bin/**",
+  "scripts/**",
+  "sandbox/**",
+  "prompts/**",
+  ".claude/**",
+  "codex/**",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "Makefile",
+]
+
+# Approved by the product owner: specs, sprints, product documents.
+human_gated = ["docs/specs/**", "docs/sprints/**", "docs/product/**"]
+
+# Project-specific high-risk code. Adjust these once the code layout exists.
+high_risk = [
+  "**/auth/**",
+  "**/payments/**",
+  "**/billing/**",
+  "**/migrations/**",
+  "infra/**",
+  "**/*.tf",
+  "**/Dockerfile",
+  "**/docker-compose*.yml",
+]
+
+# A new or changed dependency is always reviewed by a human (supply chain, slopsquatting).
+dependency_manifests = [
+  "**/package.json",
+  "**/pyproject.toml",
+  "**/requirements*.txt",
+  "**/go.mod",
+  "**/Cargo.toml",
+  "**/Gemfile",
+  "**/pom.xml",
+  "**/build.gradle*",
+]
