@@ -377,7 +377,7 @@ You look at two places:
 *Layer 1, isolation (settled by the checklist in [layer-1-isolation.md](layer-1-isolation.md)).*
 
 - Docker Sandboxes on a real Mac: the `sbx` commands the scripts use, clone mode, that the whole project directory, ignored files included, is what clone mode mounts, whether the proxy injects the App token into `git push` over HTTPS, the home directory path inside the sandbox, and headless runs of each harness.
-- Three `sbx` commands the setup depends on: `sbx settings set skills.defaultMode off`, `sbx policy init deny-all` and `sbx policy reset --force`. Per-sandbox network rules.
+- Three `sbx` commands the setup depends on: `sbx settings set skills.defaultMode off`, `sbx policy init deny-all` and `sbx policy reset --force`; and network rules for one sandbox (`sbx policy allow network --sandbox NAME HOST`).
 - The network probe inside a real sandbox: that `curl` is present there, what a request denied by the sbx proxy looks like from inside, and that `github.com` is reachable. That sbx accepts the longest sandbox name the script produces.
 - Minting an agent App token against the real API (`agentctl app-token`), and narrowing it to fewer permissions: a push token with pull requests: read, refused when it tries to open or review a pull request.
 - What a cloud session connected to a personal admin account can do on GitHub.
