@@ -92,6 +92,7 @@ class State:
     last_po_dispatch: float | None = None
     merged_elsewhere: set[str] = field(default_factory=set)  # stories merged in an earlier sprint
     unopened_branches: list[str] = field(default_factory=list)  # agent branches with no pull request yet
+    approved_prs: list[int] = field(default_factory=list)  # spec/sprint pull requests a human has approved
 
 
 @dataclass(frozen=True)
@@ -245,6 +246,10 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
             continue
         opened.append(Action("open-pr", reason=branch))
         budget -= 1 if is_story else 0
+    # A spec or sprint pull request is the director's decision. Once they approved it,
+    # letting it merge is not a judgement the conductor makes, so shadow mode does not apply.
+    for number in state.approved_prs:
+        opened.append(Action("enable-auto-merge", reason=f"#{number}"))
 
     if state.main_red:
         if not state.main_fix_in_flight:

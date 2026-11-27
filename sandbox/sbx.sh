@@ -165,9 +165,15 @@ case "${1:-}" in
     # The allowlist only means something on top of a deny-all preset. sbx cannot change
     # a preset in place, and resetting removes every custom rule on this machine, so
     # that step needs your explicit say-so.
-    if [ "${AGENT_RESET_POLICY:-0}" = "1" ]; then sbx policy reset --force; fi
-    sbx policy init deny-all || die "sbx already has a network preset. Re-run as: AGENT_RESET_POLICY=1 sandbox/sbx.sh setup
+    # Once this script has set deny-all it remembers, so that re-running setup (to
+    # refresh the pinned tooling) does not need a reset.
+    preset_marker="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dev/sbx-deny-all"
+    if [ "${AGENT_RESET_POLICY:-0}" = "1" ]; then sbx policy reset --force; rm -f "$preset_marker"; fi
+    if [ ! -e "$preset_marker" ]; then
+      sbx policy init deny-all || die "sbx already has a network preset. Re-run as: AGENT_RESET_POLICY=1 sandbox/sbx.sh setup
 That removes ALL your existing sbx network rules and starts from deny-all."
+      mkdir -p "$(dirname "$preset_marker")" && : > "$preset_marker"
+    fi
     sbx daemon restart
     install_helper
     # Every sandbox: source control and model providers. Registries are added per sandbox.

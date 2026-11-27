@@ -174,10 +174,13 @@ class DispatchTests(unittest.TestCase):
         os.environ["GITHUB_ACTIONS"] = "true"
         failures, calls = self.run_actions(roles, dict(stage="impl", harness="ollama", attempt=1))
         self.assertEqual((failures, calls), (0, []))
-        # On another developer's Mac it waits too.
+        # On another developer's Mac it waits too, whatever the route: that conductor
+        # only holds its own developer's credentials.
         del os.environ["GITHUB_ACTIONS"]
-        os.environ.update(CONDUCTOR_LOCAL_DEVELOPER="bob", AGENTCTL_TRUSTED_SCRIPTS="/x")
+        os.environ.update(CONDUCTOR_LOCAL_DEVELOPER="bob", AGENTCTL_TRUSTED_SCRIPTS="/x", DISPATCH_TOKEN="bobs")
         failures, calls = self.run_actions(roles, dict(stage="impl", harness="ollama", attempt=1))
+        self.assertEqual((failures, calls), (0, []))
+        failures, calls = self.run_actions({"harness": {"codex": {"via": "comment"}}}, dict(stage="impl", harness="codex", attempt=1))
         self.assertEqual((failures, calls), (0, []))
 
     def test_missing_credentials_fail_before_anything_is_written(self):
@@ -210,6 +213,18 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(github.select_pr(prs, "012", "main")["number"], 6)
         self.assertEqual(github.select_pr([p for p in prs if p["number"] != 6], "012", "main")["number"], 5)
         self.assertIsNone(github.select_pr([pr(9, "CLOSED")], "012", "main"))
+
+    def test_only_human_approved_spec_and_sprint_pull_requests_merge_by_themselves(self):
+        def pr(number, head, decision, **kw):
+            return dict({"number": number, "state": "OPEN", "headRefName": head, "baseRefName": "main",
+                         "isCrossRepository": False, "reviewDecision": decision, "autoMergeRequest": None}, **kw)
+        prs = [pr(1, "spec/014-x", "APPROVED"), pr(2, "sprint/002", "REVIEW_REQUIRED"),
+               pr(3, "chore/docs", "APPROVED"),          # chores are merged by a person
+               pr(4, "chore/typo", None),                 # nobody had to review it: never auto-merged
+               pr(5, "spec/015-y", "APPROVED", baseRefName="other"),
+               pr(6, "spec/016-z", "APPROVED", autoMergeRequest={"x": 1}),
+               pr(7, "story/001-a", "APPROVED")]
+        self.assertEqual(github.approved_decision_prs(prs, "main"), [1])
 
     def test_branches_without_a_pull_request_for_their_tip(self):
         prs = [{"headRefName": "story/001-a", "headRefOid": "old", "state": "MERGED", "isCrossRepository": False},

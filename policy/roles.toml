@@ -81,7 +81,8 @@ triage = ["claude"]
 # review = ["codex"]
 # triage = ["codex"]
 
-# Example C: add a local model for the cheap stages (needs the self-hosted runner).
+# Example C: add a local model for the cheap stages. It runs in a local sandbox,
+# so those stages only start while `agentctl conductor here` runs on that person's Mac.
 #
 # [developers.SOME_LOGIN.stages]
 # design = ["claude"]

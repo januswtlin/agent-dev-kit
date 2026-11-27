@@ -231,6 +231,10 @@ class PullRequestsAndDependencies(unittest.TestCase):
         # Spec and chore branches always get one; a story branch waits for tomorrow's budget.
         self.assertEqual([a.reason for a in actions if a.kind == "open-pr"], ["chore/fix-main", "spec/014-refunds"])
 
+    def test_only_approved_spec_and_sprint_pull_requests_are_set_to_merge(self):
+        actions = run(state(story("001", last_dispatch=Dispatch("design", NOW - 60)), approved_prs=[31, 40]))
+        self.assertEqual([(a.kind, a.reason) for a in actions], [("enable-auto-merge", "#31"), ("enable-auto-merge", "#40")])
+
     def test_story_waits_while_its_pull_request_is_being_opened(self):
         s = story("001", stage_done=DONE, last_dispatch=Dispatch("impl", NOW - 60))
         self.assertEqual(kinds(run(state(s, unopened_branches=["story/001-add"]))), [("open-pr", "", "")])

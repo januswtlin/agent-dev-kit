@@ -2,12 +2,27 @@
 
 *English: [README.md](README.md)。兩份內容不一致時以英文版為準。*
 
-補充產能與備援。Mac 開著時，VM 裡的 runner 會自動領取 conductor 排進 GitHub 的
-`agent-job`，不需要人下指令。Ollama 的任務只能走這條路。
+**這條路徑不屬於受支援的設定。** 設定專案或機器時不要照這一頁做。保留這一頁，是給想把這件事做完的人當參考。受支援的本機路徑是由本機 conductor 啟動的 Docker Sandbox（`sandbox/sbx.sh`），見 [docs/new-machine-zh-TW.md](../../docs/new-machine-zh-TW.md)。
+
+不受支援的原因：
+
+- Lima VM 長期存在、有免密碼的 sudo，還保存著 agent 的登入狀態（Claude Code、Codex、agent App 的 key）。在它的 runner 上執行的程式碼可以改動防火牆、讀取這些登入狀態，並且留下來影響之後的 job。Runner 在 job 之間不會重建。
+- 因此預算 overflow **預設是關閉的**：`policy/conductor.toml` 的 `overflow_runner = []`。`agentctl budget` 仍然會估算並回報用量，但在沒有設定 runner 時不會搬動任何東西。`ci` 與 `security` 會執行 pull request 的程式碼。它們只能移到專門給它們用、不保存任何憑證或登入狀態、而且每個 job 都重建的 runner。這個 VM 不符合條件，這個 template 也沒有提供這樣的 runner。沒有 overflow 時，Actions 額度一用完，CI 就會停止，在下個月或你加購額度之前不會有任何東西被合併。
+
+如果你仍然要設定它，已知的缺口如下：
+
+- `sandbox/allowlist.txt` 與 `sandbox/allowlist-build.txt` 沒有列出 GitHub Actions runner 需要的主機，所以以目前的設定，runner 在 VM 的 egress 過濾之下無法運作（**待驗證**：主機清單，以 GitHub 的 self-hosted runner 文件為準）。
+- Runner 的 service 拿不到 `AGENT_APP_ID` 與 `AGENT_APP_KEY`。[docs/new-machine-zh-TW.md](../../docs/new-machine-zh-TW.md) 把它們 export 在 `~/.profile`，只有 login shell 會讀這個檔案。`agent-job` workflow 會呼叫 `bin/agentctl app-token`，它需要這兩個變數。
+- 這裡的內容都還沒在實機上跑過。
+
+它原本的設計用途：Mac 開著時，VM 裡的 runner 會領取 conductor 排進 GitHub 的
+`agent-job`，對象是在 `policy/roles.toml` 設為 `via = "workflow"` 的 harness。預設沒有任何 harness 使用這個設定。
+
+Ollama 的 stage **不**在這裡執行。它們在本機的 Docker Sandbox 內執行，由本機 conductor 啟動（`via = "sbx"`）。
 
 雲端 session 仍是主力，因為筆電闔上時它們照常運作。在 Mac 上，主要路徑是由本機 conductor 啟動的 Docker Sandbox（`sandbox/sbx.sh`）；這個 runner 位於 Lima 備援 VM 內，是兩者中較弱的一個。
 
-這個 runner 還有第二個用途：當月 Actions 額度接近用完時，`agentctl budget` 會把 `ci` 與 `security` 這兩個執行 PR 程式碼的重型 job 改派到這裡。負責判定的 job 不會過來。
+這個 runner 原本還要在當月 Actions 額度接近用完時接手 `ci` 與 `security`。那就是上面說的 overflow，目前是關閉的。負責判定 pull request 的 job 永遠不會移到 self-hosted runner。
 
 ## 安全前提
 
@@ -66,4 +81,4 @@ MacBook Air 闔上螢幕就會睡眠，睡眠期間 runner 離線，排隊中的
 
 ## 尚未驗證
 
-這份設定還沒在實機上跑過。完成後請執行 `docs/redteam-machine-zh-TW.md`。
+這份設定還沒在實機上跑過，也不屬於受支援的設定（見本頁開頭）。如果你仍然把它裝起來，請執行 `docs/redteam-machine-zh-TW.md`。

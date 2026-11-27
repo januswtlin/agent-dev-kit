@@ -165,6 +165,19 @@ def unopened_branches(branches: list[tuple[str, str]], prs: list[dict], default_
     return sorted(result)
 
 
+def approved_decision_prs(prs: list[dict], default_branch: str) -> list[int]:
+    """Open spec/sprint pull requests into the default branch that a human approved.
+
+    "Approved" is GitHub's own review decision, which with code owner review
+    required means an owner approved the current commit. A pull request nobody
+    has to review has no decision and is never picked up here.
+    """
+    return sorted(p["number"] for p in prs
+                  if p.get("state") == "OPEN" and p.get("headRefName", "").startswith(("spec/", "sprint/"))
+                  and p.get("baseRefName") == default_branch and not p.get("isCrossRepository")
+                  and p.get("reviewDecision") == "APPROVED" and not p.get("autoMergeRequest"))
+
+
 def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[State, dict]:
     """Build the State the planner needs, plus a context dict for the executor."""
     sprint_id, sprint = active_sprint(repo_root)
@@ -294,6 +307,7 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
         last_po_dispatch=last_po,
         merged_elsewhere=merged_elsewhere,
         unopened_branches=unopened_branches(branches, prs, default_branch),
+        approved_prs=approved_decision_prs(prs, default_branch),
     )
     context = {"repo": repo, "default_branch": default_branch, "sprint": sprint_id,
                "sprint_issue": sprint_issue["number"],
@@ -362,15 +376,16 @@ def preflight(action: Action, context: dict, roles: dict) -> None:
     developer = context.get("assignees", {}).get(action.story, "")
     who = f" and developer '{developer}'" if developer else ""
     via = harness.get("via", "workflow")
+    local = os.environ.get("CONDUCTOR_LOCAL_DEVELOPER", "")
+    if local and developer and developer != local:
+        # A conductor on one person's Mac holds that person's credentials only.
+        raise Deferred(f"story {action.story} belongs to {developer}; this conductor runs for {local}")
     if action.stage == "review" and harness.get("review_workflow"):
         if not context.get("prs", {}).get(action.story):
             raise SystemExit(f"story {action.story} has no open pull request to review")
     elif via == "sbx":
-        local = os.environ.get("CONDUCTOR_LOCAL_DEVELOPER", "")
         if os.environ.get("GITHUB_ACTIONS") or not local:
             raise Deferred(f"harness '{action.harness}' runs in a local sandbox; waiting for `agentctl conductor here`")
-        if developer and developer != local:
-            raise Deferred(f"story {action.story} runs on {developer}'s machine, not {local}'s")
         if not os.environ.get("AGENTCTL_TRUSTED_SCRIPTS"):
             raise SystemExit("AGENTCTL_TRUSTED_SCRIPTS is not set; local sandboxes are started by `agentctl conductor here`")
     elif via == "comment":
@@ -489,10 +504,7 @@ def _open_pr(branch: str, context: dict) -> None:
     args = ["api", f"repos/{repo}/pulls", "-f", f"title={title}", "-f", f"head={branch}", "-f", f"base={base}",
             "-f", f"body=Opened by the conductor for branch `{branch}`.", "-F", f"draft={'true' if story else 'false'}",
             "--jq", ".number"]
-    number = gh(*args).strip()
-    if number and not story:
-        # Specs, sprints and chores wait for a human approval, then merge by themselves.
-        gh("pr", "merge", number, "--auto", "--squash", check=False)
+    gh(*args)
 
 
 def _execute_one(action: Action, context: dict, roles: dict) -> None:
@@ -524,8 +536,9 @@ def _execute_one(action: Action, context: dict, roles: dict) -> None:
         if pr:
             gh("api", "--method", "PUT", f"repos/{context['repo']}/pulls/{pr}/update-branch")
     elif action.kind == "enable-auto-merge":
-        if pr:
-            gh("pr", "merge", str(pr), "--auto", "--squash")
+        number = str(pr) if pr else action.reason.lstrip("#")
+        if number.isdigit():
+            gh("pr", "merge", number, "--auto", "--squash")
     elif action.kind == "escalate":
         # Mention, do not assign: assignees are not how the conductor knows whose story it is,
         # but changing them would still be confusing.
