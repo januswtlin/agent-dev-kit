@@ -291,7 +291,7 @@ agentctl conductor
 
    Leave it running. Paused, it prints only `halt`.
 
-3. Unpause for one pass only if you want it to open the pull request: the conductor opens nothing while paused. Alternatively open it by pushing and unpausing, then pause again before the merge. A simpler order: unpause, wait for the conductor to open the pull request for `sprint/001` (ready for review), then pause before approving.
+3. Unpause and wait for the conductor to open the pull request for `sprint/001` (ready for review): it opens nothing while paused. Then pause again before you approve it.
 
 ```bash
 gh variable set CONDUCTOR_PAUSED --body false

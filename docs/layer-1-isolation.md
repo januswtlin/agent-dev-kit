@@ -1,6 +1,6 @@
 # Layer 1: Isolation
 
-*繁體中文：not yet translated. The English version governs.*
+*繁體中文：[layer-1-isolation-zh-TW.md](layer-1-isolation-zh-TW.md). The English version governs if the two differ.*
 
 This layer keeps agents away from everything on your Mac and your accounts that they do not need. It gives you Docker Sandboxes (`sbx`) in clone mode, one GitHub App per developer as the agents' identity, a network allowlist, and Mac hygiene. It does not decide what may be merged (layer 2), what must pass before a merge (layer 3), or who starts agents (layer 4). It needs nothing from the other layers, and each of them assumes this one. The design and the reasons are in [guideline.md](guideline.md); the threats it answers are in [threat-model.md](threat-model.md); adopting the kit in a project is in [adopting.md](adopting.md).
 

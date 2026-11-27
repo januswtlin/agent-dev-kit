@@ -1,6 +1,6 @@
 # Layer 2: GitHub protection
 
-*繁體中文：not yet translated. The English version governs.*
+*繁體中文：[layer-2-github-zh-TW.md](layer-2-github-zh-TW.md). The English version governs if the two differ.*
 
 This layer makes GitHub itself refuse what an agent, or a mistake, should not be able to do: change `main` without a pull request, merge its own work, approve its own work, move a release tag, or read the pipeline's secrets from a branch. It gives you three rulesets (`agentctl rulesets 2`) and, once layer 3 exists, a fourth that requires its checks (`agentctl rulesets 3`), CODEOWNERS generated from `agentdev.toml` (`agentctl codeowners`), the `conductor` environment, the Conductor GitHub App, and a few repository settings. It does not run any check: the checks the `main-checks` ruleset requires come from layer 3. It does not start agents: that is layer 4. It pairs with [layer-1-isolation.md](layer-1-isolation.md), whose agent tokens are what these rules are written against. The design is in [guideline.md](guideline.md); the threats are in [threat-model.md](threat-model.md); adopting the kit is in [adopting.md](adopting.md).
 
