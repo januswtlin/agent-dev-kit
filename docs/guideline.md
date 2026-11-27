@@ -1,196 +1,239 @@
-# Guideline for the AI Coding Agent Development Environment
+# Guideline for the AI Coding Agent Development Kit
 
 *繁體中文：[guideline-zh-TW.md](guideline-zh-TW.md). The English version governs if the two differ.*
 
-This document explains the design of this repo: why it is built this way, how the parts fit together, what has been verified and what has not.
-Setting up a project is in [new-project.md](new-project.md), setting up a person's computer in [new-machine.md](new-machine.md), and running it in [operations.md](operations.md). Threats and the controls that answer them are in [threat-model.md](threat-model.md).
+This document explains the design of the kit: why it is built this way, how the parts fit together, what has been verified and what has not. It has no setup steps. Each layer has its own setup document and checklist: [layer 1, isolation](layer-1-isolation.md), [layer 2, GitHub protection](layer-2-github.md), [layer 3, CI gates](layer-3-ci.md) and [layer 4, the conductor](layer-4-conductor.md). Adopting the kit in a project is in [adopting.md](adopting.md). Threats and the controls that answer them are in [threat-model.md](threat-model.md).
 
 ## 1. Goals
 
 1. **Agents cannot reach your private data and cannot cause irreversible damage.** In order of severity: reading private files (once read, it cannot be taken back), deleting files outside the working directory by mistake, using temporarily valid cloud credentials on the machine, and, in future, production.
-2. **Human attention is the bottleneck.** You are the director: you decide what to build, approve the scope, and release to production. You do not read ordinary PRs, merge, or dispatch work.
+2. **Human attention is the bottleneck.** You are the director: you decide what to build, approve the scope, and release to production. You do not read ordinary pull requests, merge, or dispatch work.
 
-It assumes nothing fixed about the team. One person with one AI subscription is enough. So is one person with several, or several people who each bring their own. Who may approve product decisions, and which harness does which stage for each person, are settings (`policy/roles.toml`, `.github/CODEOWNERS`). Only two things are constant: agents run on subscriptions, with no pay-as-you-go API keys, and the repo is on a GitHub plan that enforces rulesets on private repos.
+The kit assumes nothing fixed about the team. One person with one AI subscription is enough. So is one person with several, or several people who each bring their own. Who may approve product decisions, and which harness does which stage for each person, are settings in `agentdev.toml` (`[roles]`), and CODEOWNERS is generated from the same file. Only two things are constant: agents run on subscriptions, with no pay-as-you-go API keys, and the repository is on a GitHub plan that enforces rulesets on private repositories.
 
 ## 2. Three principles
 
 **Protect with capability boundaries, not with agent self-discipline.** Prompts, permission settings and command blocklists can all be bypassed, so they only count as a second layer. The real guarantee is that nothing capable of causing damage exists in the environment where the agent runs. It cannot see your home directory, and the token it holds has no dangerous permissions.
 
-**GitHub is the only control plane.** All harnesses hand work over only through branches, PRs and issues. Changing models, changing vendors or adding a local model does not change the process. This is also why no API key is needed: each vendor's model runs in its own harness on subscription quota.
+**GitHub is the only control plane.** All harnesses hand work over only through branches, pull requests and issues. Changing models, changing vendors or adding a local model does not change the process. This is also why no API key is needed: each vendor's model runs in its own harness on subscription quota.
 
 **Mechanical checks take precedence over what the agent says about itself.** Agents declare completion too early and overestimate their own output. Whatever can be verified by a program (whether a test really exists and runs, whether it really exercises the behaviour) is not asked of the agent.
 
-## 3. Trust zones
+## 3. The kit, its layers and its settings
+
+### Four layers
+
+| Layer | Concern | Main parts |
+|---|---|---|
+| 1. Isolation | Agents cannot reach the Mac or hold powerful credentials | Docker Sandboxes (sbx) in clone mode, a GitHub App per developer for agents, Mac hygiene, cloud sessions |
+| 2. GitHub protection | Agents cannot change what judges them, merge, or release | Rulesets (`templates/rulesets/`, applied by `agentctl rulesets 2`), CODEOWNERS generated from `agentdev.toml`, the `conductor` environment, the Conductor GitHub App |
+| 3. CI gates | Nothing merges without evidence | The reusable workflows `ci`, `security`, `spec-verify`, `risk-gate`, `agent-review` |
+| 4. Conductor | Work moves forward without you | `agentctl conductor`, which dispatches stages to agents, opens pull requests and, once you allow it, merges |
+
+Each layer can be adopted on its own, but they lean on one another. Layer 2 can be adopted alone. Layer 3 is only as strong as layer 2: a check an agent can edit or skip proves nothing. Layer 4 needs the identities of layer 1 and the rulesets of layer 2, and its merges are only as good as the gates of layer 3. For an existing project the order is 1 and 2, then 3, then 4 in shadow mode (section 9).
+
+### Installed once per Mac, pinned per project
+
+The kit's host-side code runs on the Mac with your permissions, and an agent can change anything in a project's tree. So that code is never in the project tree.
+
+- `install.sh [REF]`, run from a clone of the kit, unpacks a version by its full commit SHA into `~/.local/share/agent-dev-kit/versions/<sha>/`, makes it read-only, and puts the `agentctl` launcher in `~/.local/bin`.
+- The launcher runs the version the project pins in `agentdev.toml` (`[kit] version`), read from the project's **default branch** (`origin/HEAD`, as last fetched), never from the working tree. A branch, an agent's included, cannot choose which code runs on the Mac. `AGENTDEV_KIT_VERSION` overrides the pin, for use outside a project or while adopting the kit before the pin is on the default branch.
+- The launcher starts the tools as `python3 -I`, which keeps the current directory and `PYTHONPATH` off the import path, so a file named `json.py` in a checkout cannot shadow the real module.
+
+Consequence: there is no "is this checkout trusted" check, no per-project copy of the tools, and no rule against running host scripts from an agent's branch. Code an agent cannot change needs none.
+
+The same holds in CI. Each reusable workflow takes `kit_version`, fetches the kit at that SHA from codeload into the runner's temporary directory, and runs it from there. A project's caller workflows (`agentdev-*.yml`) name the SHA twice, in `uses: ...@<sha>` and in `kit_version: <sha>`. `agentctl pins`, run in the `ci` lint step, fails unless both equal `[kit] version`. To upgrade, change the SHA in `agentdev.toml` and in every caller in one pull request, which is a T2 change, and run `./install.sh <sha>` on each Mac.
+
+### One configuration file
+
+`agentdev.toml` at the project root holds every project setting, over the kit's defaults (`tools/agentctl/defaults.toml`, which is the reference for every key). Tables merge key by key; any other value, a list included, replaces the default as a whole. `agentctl config KEY` prints a setting.
+
+| Section | Holds |
+|---|---|
+| `[kit]` | The pinned version and the kit's repository |
+| `[paths]` | Where specs, sprints, the roadmap, product documents and design notes live |
+| `[stories]` | `id_digits` (default 3), `translation` (default `zh-TW`, `""` for none), `max_lines` |
+| `[docs]` | Translation pairing of documents and which must exist |
+| `[tests]` | `setup_cmd`, `lint_cmd`, `test_cmd`, `junit_glob`, `test_paths`: the contract with the project's stack |
+| `[risk.thresholds]`, `[risk.t0]`, `[risk.t2]` | Risk tiers (section 6) |
+| `[conductor]` | Limits, fuses, `auto_merge_tiers`, stage timeouts, the Actions budget |
+| `[roles]` | Directors, humans, the planner, how each harness is started, which harness does which stage for whom |
+
+`.github/**` and `agentdev.toml` are always guardrails, whatever a project writes. T2 can never be listed in `auto_merge_tiers`. A change to the file is T2, so an agent cannot loosen its own limits. The stage prompts belong to the kit (`prompts/`); they are templates filled in from this file (`agentctl prompt STAGE`), and the conductor sends the whole rendered prompt in each dispatch, so a project needs no prompt files.
+
+## 4. Trust zones
 
 | Zone | Contents | What an agent can do |
 |---|---|---|
-| 0 Your Mac | Private data, browser, Keychain, temporarily valid cloud tokens, Ollama | Coding agents do not run here |
-| 1 Sandbox | A local VM, or the vendor's cloud session. Only the project directory, mounted read-only | Full autonomy inside; cannot get out |
-| 2 GitHub | Rulesets, required checks, CODEOWNERS | Can only push branches. Cannot open or merge a PR; everything else must pass the gates |
+| 0 Your Mac | Private data, browser, Keychain, temporarily valid cloud tokens, the installed kit, Ollama | Coding agents do not run here |
+| 1 Sandbox | A local microVM, or the vendor's cloud session. The project's repository, mounted read-only, with a private clone inside | Full autonomy inside; cannot get out |
+| 2 GitHub | Rulesets, required checks, CODEOWNERS | Can only push branches. Cannot open or merge a pull request; everything else must pass the gates |
 | 3 Production | Cloud resources, databases | Nothing. Only a release tag pushed by a human can trigger a deployment |
 
-### Rules for Zone 1
+### Rules for zone 1
 
-**Coding agents always run in a VM or in the cloud, never directly under a user account on the Mac.**
+**Coding agents always run in a microVM or in the cloud, never directly under a user account on the Mac.**
 
-The sandbox built into a harness is not enough to protect privacy. Claude Code's sandbox allows reading almost the whole file system by default, and it covers only Bash, not the file tools, MCP servers or hooks. Codex's `workspace-write` likewise restricts only writes. They work against accidental deletion, but protection against reading depends on you listing every path correctly. A VM's mounts are deny by default: what is not mounted does not exist.
+The sandbox built into a harness is not enough to protect privacy. Claude Code's sandbox allows reading almost the whole file system by default, and it covers only Bash, not the file tools, MCP servers or hooks. Codex's `workspace-write` likewise restricts only writes. They work against accidental deletion, but protection against reading depends on you listing every path correctly. A microVM's mounts are deny by default: what is not mounted does not exist.
 
-The local sandbox is Docker Sandboxes (`sandbox/sbx.sh`). Six properties. The `sbx` commands behind them follow the Docker Sandboxes documentation and have not been run on a real machine (**To verify**; see section 9).
+The local sandbox is Docker Sandboxes (`sandbox/sbx.sh`, run through `agentctl sandbox`). It is the only supported local runtime. Its properties:
 
-- One microVM per agent, with its own kernel.
-- **Clone mode.** The repository is mounted read-only and the agent works on a private clone inside the VM. Nothing it does changes a file on the Mac, and its only way to deliver work is `git push`. This matters more than it looks. With an ordinary read-write mount, an agent can write a git hook into `.git/hooks`, and that hook then runs on the Mac, as you, the next time you use git in that directory. The mount is the whole repository directory, including untracked files and files that git ignores. So nothing secret may live in the project directory. `sbx.sh` refuses to start a sandbox, and to re-attach to an interactive one, while it finds an untracked file whose name looks like a secret, whether git ignores the file or not (`.env*`, `*.pem`, `*.key`, `*.pfx`, `.netrc`, `.npmrc` and similar names, compared without regard to case); `AGENT_ALLOW_FILES_IN_TREE=1` overrides this. The names are read NUL-separated, so a file under a path with non-ASCII characters is found too. The check goes by file name, so it is a reminder, not a guarantee.
-- Outbound connections are denied except to allowlisted hosts, filtered by host name. `setup` requires sbx's deny-all network preset (`sbx policy init deny-all`) and adds the hosts in `sandbox/allowlist.txt` on top of it. The package registries in `sandbox/allowlist-build.txt` are added per sandbox, only for stages that build. If a preset already exists (Docker's "balanced" preset allows package managers), `setup` stops and asks to be re-run with `AGENT_RESET_POLICY=1`. That runs `sbx policy reset --force` first, which removes every existing sbx network rule on the machine. Once `setup` has set deny-all it records the fact on the host, so running it again to refresh the pinned tooling needs no reset. That record is a convenience only. The preset is machine-wide and can be changed outside the script, and a sandbox that already exists keeps what it was given. So every time `sbx.sh` creates a sandbox, and every time `up` re-attaches to an interactive one, it makes up to three requests from inside the sandbox with `curl`. First `https://github.com/`, which is on the allowlist, must answer with a 2xx or 3xx status. If it does not, the script cannot tell "refused" from "no network" and stops with "cannot check". Then `https://example.com/`, and for a stage that does not build also `https://registry.npmjs.org/`. A 2xx or 3xx answer from either means the host is reachable, and the script refuses to go on. No answer at all, or a 4xx or 5xx answer, counts as refused: these URLs answer 200 when they are really reached, so an error status is taken to be the proxy answering in the host's place. A missing `curl` or a failed `sbx exec` is also "cannot check". `AGENT_SKIP_NETWORK_PROBE=1` proceeds past "cannot check"; it does not override a host that was found reachable. With the override the remaining requests are still made, and a host found reachable still stops the script; only the request that could not be judged is passed over. An interactive sandbox that is refused is left in place so that you can inspect it; the sandbox of an unattended job is removed, because nobody is there to inspect it. This is a spot check of three hosts at that moment. It does not prove that the effective allowlist equals the project's lists, and it is not a continuous check. (**To verify** on a real machine: what a request denied by the sbx proxy looks like from inside, no answer or which status, and that `github.com` is reachable.) The allowlist limits both data exfiltration after a prompt injection and callbacks from malicious packages.
-- No GitHub credential inside the VM. A proxy on the host replaces a placeholder with a one-hour token of your agent GitHub App, which a helper on the host mints when it is needed. The App's private key never leaves the host. SSH agent forwarding is turned off, because it is on by default and would let the agent push as you. The shared skills store is turned off too (`sbx settings set skills.defaultMode off`), because by default it is mounted read-only into every sandbox.
-- One sandbox per dispatched stage, never reused. An unattended job gets a name that is unique per invocation, `ag-<tag>-<story>-<stage>-<harness>-<stamp>`, where `<stamp>` is 10 hex characters: the time plus a random byte. If a sandbox of that name already exists, the job refuses to start and does not remove the existing sandbox. The job's own sandbox is removed however the job ends, an interrupt included. Interactive sandboxes are named per stage, `ag-<tag>-<stage>-<harness>`, so `up claude` (impl) and `up claude review` are two different sandboxes, and `up` re-attaches only to the one created for that same stage. `<tag>` is the first 8 characters of `<owner>-<repo>` in lower case, a hyphen, and 6 hex characters of a hash of `<owner>/<repo>`. Sandbox names are limited to 63 characters, and the script refuses a longer one. (**To verify**: that sbx accepts the longest name the script produces.) Stages share no files, processes or login state, and each is given only what it needs (see "Role assignment" in section 5).
-- Nothing from the project directory is executed on the host. The tooling that sets up a sandbox is a copy taken from the default branch and pinned outside the repo, in `~/.local/share/agent-dev/<owner>-<repo>/`. It is started as `python3 -I`, which keeps the current directory and `PYTHONPATH` off the import path. Host state is keyed by the owner and name of the origin remote, so two clones with the same directory name do not share helpers. The pinned directory records which repository it belongs to. Two repositories whose `<owner>-<repo>` names collide (`a-b/c` and `a/b-c`) would otherwise share the tooling and the token helpers, so `sbx.sh` refuses the second one and tells you to set `XDG_DATA_HOME` to keep them apart. The same ownership check runs when `up` re-attaches to a sandbox. Story id, stage and harness are validated before they reach a path, a sandbox name or a command.
+- **One microVM per agent**, with its own kernel.
+- **Clone mode.** The repository is mounted read-only and the agent works on a private clone inside the VM. Nothing it does changes a file on the Mac, and its only way to deliver work is `git push`. This matters more than it looks. With an ordinary read-write mount, an agent can write a git hook into `.git/hooks`, and that hook then runs on the Mac, as you, the next time you use git in that directory. The mount is the whole repository directory, including untracked and ignored files, so nothing secret may live in the project directory. The script refuses to start a sandbox while it finds an untracked file whose name looks like a secret. That check goes by file name, so it is a reminder, not a guarantee.
+- **Outbound connections are denied except to allowlisted hosts**, filtered by host name: sbx's deny-all preset plus `sandbox/allowlist.txt`, and the package registries of `sandbox/allowlist-build.txt` only for stages that build. The allowlist limits both data exfiltration after a prompt injection and callbacks from malicious packages. Because the preset is machine-wide and can be changed outside the script, each sandbox is also probed from inside when it is created: GitHub must be reachable, and two hosts that are not allowlisted must not be. This is a spot check of three hosts at that moment. It cannot tell a policy denial from an origin's own 403 or 5xx answer, and it does not prove that the effective allowlist equals the project's lists.
+- **No GitHub credential inside the VM.** A proxy on the host replaces a placeholder with a one-hour token of the developer's agent GitHub App, which a helper on the host mints when it is needed. The App's private key never leaves the host. SSH agent forwarding is turned off, because it is on by default and would let the agent push as you. The shared skills store is turned off too, because by default it is mounted read-only into every sandbox.
+- **One sandbox per dispatched stage, never reused**, and removed however the job ends. Stages share no files, processes or login state, and each is given only what it needs (section 7, "Role assignment").
+- **Nothing from the project directory is executed on the host.** The sandbox scripts are the installed kit's own, and what they read from the project (`agentdev.toml`) comes from the default branch. Story id, stage and harness are validated before they reach a path, a sandbox name or a command.
 
-Lima (`sandbox/vm.sh`) remains in the repo as a fallback. It is not part of the supported setup path. It is weaker on three counts: the workspace is mounted read-write, traffic is filtered by address rather than by host name, and the App's key has to live inside the VM. The self-hosted runner that lives in it (`sandbox/runner/`, `agent-job.yml`) has known gaps: the allowlists lack the hosts a GitHub Actions runner needs, and the runner service is not given `AGENT_APP_ID` and `AGENT_APP_KEY`. Neither Docker Sandboxes nor Lima has been run on a real machine yet; see section 9.
+There is no interactive mode. To work with an agent yourself, use sbx directly (`sbx create --clone`, `sbx run`). Such a sandbox gets the machine-wide deny-all preset and allowlist from `agentctl sandbox setup`, but no GitHub token and no harness deny rules.
 
-Cloud sessions (Claude Code on the web, Codex cloud) are vendor-managed VMs that cannot reach your laptop at all. They are the strongest isolation for privacy, and the only place where work can continue while the laptop is closed. Set the environment's network to restricted and put no secrets in it.
+**Cloud sessions** (Claude Code on the web, Codex cloud) are vendor-managed VMs that cannot reach your laptop at all. They are the strongest isolation for privacy, and the only place where work can continue while the laptop is closed. Set the environment's network to restricted and put no secrets in it.
 
 ### Hygiene rules on the Mac
 
-`bin/agentctl doctor` checks those of the following that can be checked.
+`agentctl doctor` checks those of the following that can be checked.
 
-- Keep projects somewhere not synced by iCloud, such as `~/dev`. An accidental deletion in an iCloud-synced directory syncs to every device.
-- Keep nothing secret in the project directory: no `.env` files, keys or credentials, ignored ones included. A clone-mode sandbox can read the whole directory. For this reason the local conductor's credentials live in `~/.config/agent-dev/<owner>-<repo>/conductor.env`, outside the repo.
-- Run `sandbox/sbx.sh` and `bin/agentctl conductor here` from a clean checkout of the default branch, never from an agent's branch. Both run on the Mac with your permissions. Both refuse to start when `sandbox/`, `tools/`, `bin/` or `policy/` in the checkout differ from the default branch (`AGENT_ALLOW_MODIFIED_SCRIPTS=1` overrides this, for developing the scripts themselves). This check guards against an accident. It is part of the scripts it checks, so it is not a defence against a checkout that is already hostile.
+- Keep projects somewhere not synced by iCloud, such as `~/dev`. An accidental deletion in a synced directory syncs to every device.
+- Keep nothing secret in the project directory: no `.env` files, keys or credentials, ignored ones included. A clone-mode sandbox can read the whole directory. For this reason the conductor's credentials live in `~/.config/agent-dev/<owner>-<repo>/conductor.env` and the agent App's key in `~/.config/agent-app/`, outside the repository.
 - Do not grant Full Disk Access to the terminal or the IDE. Any program run inside them inherits that permission.
 - Do not enable computer use, screen recording or accessibility for agent-type desktop apps. Do not install agent extensions in the browser profile you use every day. Do not connect personal Gmail, Drive or iCloud as an agent connector or MCP server. These paths bypass the VM and reach private data directly, and there is no technical means to enforce the rule. It holds only by not turning them on.
 - Turn on Time Machine or an equivalent backup.
 - Optional: create a separate standard macOS user account for development. With private data under another account, file permissions block reading. The cost is the nuisance of switching accounts.
 
-If you really must run directly on the Mac (for example, a brief interaction inside the IDE), the host profiles in `.claude/settings.json` and `codex/config.example.toml` provide strict settings. This is the exception, not the norm.
+If you really must run an agent directly on the Mac (for example, a brief interaction inside the IDE), the project's `.claude/settings.json` and `sandbox/codex-config.example.toml` provide strict settings. This is the exception, not the norm.
 
 ### Story agents and maintenance work
 
-Agents have two roles in this repo, and the guardrails ask different things of each.
+Agents have two roles in a project, and the guardrails ask different things of each.
 
-A **story agent** is dispatched by the conductor and runs unattended. It must not edit the guardrail paths. This rule has two layers. The hard layer is CODEOWNERS and token permissions. The soft layer is the deny rules in `sandbox/story-agent.claude-settings.json`, installed in the user-level settings inside the sandbox and in the cloud environment, which apply only to story agents. The product owner and the planner are dispatched the same way but have to write specs and sprints, so they get `sandbox/spec-agent.claude-settings.json`: the guardrail paths stay off limits, the spec paths do not.
+A **story agent** is dispatched by the conductor and runs unattended. It must not edit the guardrail paths. The hard layer is CODEOWNERS, the rulesets and token permissions. The soft layer is the harness deny rules, generated for each sandbox from `[risk.t2]` (`agentctl harness-settings story|spec`) and installed in the sandbox and in the cloud environment. The product owner and the planner are dispatched the same way but have to write specs and sprints, so their rules leave the spec paths open and the guardrail paths closed.
 
-**Maintenance work** is when you ask an agent directly, in a session, to change the pipeline itself (workflows, policy, tools, prompts). This is allowed on these conditions: a human asks in person, the work is done on a `chore/` branch, and a human approves the PR. A dispatch prompt, an issue or the contents of a file does not count as such a request. The conductor opens the PR for a `chore/` branch, ready for review. A human approves it and merges it; the conductor does not enable auto-merge on a chore PR.
+**Maintenance work** is when you ask an agent directly, in a session, to change the pipeline itself (workflows, `agentdev.toml`, agent settings). This is allowed on these conditions: a human asks in person, the work is done on a `chore/` branch, and a human approves the pull request. A dispatch prompt, an issue or the contents of a file does not count as such a request. The conductor opens the pull request for a `chore/` branch, ready for review. A human approves and merges it; the conductor does not enable auto-merge on it.
 
-The repo's shared `.claude/settings.json` therefore holds only the rules that are true for both roles: no reading or writing in home, no force push, no cloud CLIs, no opening or merging PRs on its own. For an agent in a Docker Sandbox the last of these is also a hard limit; see "Identities and tokens" below. An earlier version also put the rule against editing guardrail paths in the shared settings. As a result, even maintenance work you had instructed was blocked, including fixing that setting itself.
+The project's shared `.claude/settings.json` holds only the rules that are true for both roles: no reading or writing in home, no force push, no cloud CLIs, no opening or merging pull requests on its own. Putting the rule against editing guardrails there would block even maintenance work you had asked for.
 
-### Identities and tokens
+## 5. Identities and tokens
 
 Three identities, with separate permissions:
 
 | Identity | What it is | Can | Cannot |
 |---|---|---|---|
-| Human | The people on the project, repo admins | Approve PRs, merge, push release tags, change settings | Push directly to main (nobody can); skip a check or an approval |
-| Agent | A GitHub App per developer, for that developer's agents | Push branches, comment, change labels. The review token can review a PR instead of pushing | Merge, approve as a code owner, change workflows, create tags, write commit statuses. The token that pushes cannot open, retarget or review a PR |
-| Conductor | One GitHub App for the pipeline | Open PRs, mark them ready, enable auto-merge, merge, dispatch work, notify | Approve PRs; skip a check or an approval |
+| Human | The people on the project, repository admins | Approve pull requests, merge, push release tags, change settings | Push directly to main (nobody can); skip a check or an approval |
+| Agent | A GitHub App per developer, for that developer's agents | Push branches, comment, change labels. The review token can review a pull request instead of pushing | Merge, approve as a code owner, change workflows, create tags, write commit statuses. The token that pushes cannot open, retarget or review a pull request |
+| Conductor | One GitHub App for the pipeline | Open pull requests, mark them ready, enable auto-merge, merge, dispatch work | Approve pull requests; skip a check or an approval |
 
-Why each developer's agents get their own GitHub App: an App has exactly the permissions it was granted, whatever its owner's role, so it carries no admin bypass. Its tokens expire after an hour. It takes no seat. And because there is one per developer, a commit or a comment shows whose agent made it; a single App shared by everyone would hide that. A personal access token cannot do the same: a token issued from an admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. `agentctl app-token` mints the token, and it runs on the host: the sandbox's proxy calls it and injects the result, so neither the key nor the token is inside the VM.
+**Why each developer's agents get their own GitHub App.** An App has exactly the permissions it was granted, whatever its owner's role, so it carries no admin bypass. Its tokens expire after an hour. It takes no seat. And because there is one per developer, a commit or a comment shows whose agent made it. A personal access token cannot do the same: a token issued from an admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. `agentctl app-token` mints the token on the host, and the sandbox's proxy injects it, so neither the key nor the token is inside the VM.
 
-A sandbox never gets the App's full permissions. `tools/agentctl/profiles.py` defines two tokens. The `write` token, for stages that deliver code or specs, has contents: write, issues: write and pull requests: read. It can push a branch, but it cannot open, retarget or review a PR. The `read` token, for review and triage, has contents: read, pull requests: write and issues: write. It can review and comment, but it cannot push. No agent token holds both powers; only the conductor does. (**To verify**: narrowing an App token this way through the real API.)
+**A sandbox never gets the App's full permissions.** `tools/agentctl/profiles.py` defines two tokens. The `write` token, for stages that deliver code or specs, has contents: write, issues: write and pull requests: read. It can push a branch, but it cannot open, retarget or review a pull request. The `read` token, for review and triage, has contents: read, pull requests: write and issues: write. It can review and comment, but it cannot push. No agent token holds both powers; only the conductor does.
 
-Who may update `main` is a second, separate limit. The ruleset `.github/rulesets/main-merge.json` lets only repository admins and the Conductor App update the default branch. `scripts/apply-rulesets.sh` requires `CONDUCTOR_APP_ID` in the environment and fills it in. This ruleset, not the narrowed token, is what keeps an agent from merging: GitHub's merge endpoint needs only contents: write, which the `write` token has. So an agent's token, which can push branches, cannot merge a PR even when every check on it is green. The `main` ruleset still has no bypass, so admins and the Conductor App must satisfy every check and approval too. (**To verify**: that the two rulesets layer this way.)
+**Who may update `main`** is a second, separate limit. The ruleset `main-merge` lets only repository admins and the Conductor App update the default branch. This ruleset, not the narrowed token, is what keeps an agent from merging: GitHub's merge endpoint needs only contents: write, which the `write` token has. The `main` and `main-checks` rulesets have no bypass, so admins and the Conductor App must satisfy every check and approval too.
 
-Why the conductor is a separate GitHub App: GitHub does not let an author approve their own PR. If a cloud agent opened a spec PR under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the PR. In addition, PRs opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all. The local conductor acts as the same App, for the same reason: `agentctl conductor here` mints the Conductor App's token itself, exactly like the Actions job. If it acted as you, you would be the author of the PRs it opens and could not approve them.
+**Why the conductor is a separate GitHub App.** GitHub does not let an author approve their own pull request. If a cloud agent opened a spec pull request under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the pull request. In addition, pull requests opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all. The local conductor acts as the same App for the same reason: it mints the App's token itself from the key on the Mac. If it acted as you, you would be the author of the pull requests it opens and could not approve them.
 
-Cloud sessions are the exception. Claude Code on the web and Codex cloud reach GitHub through the vendor's own integration, acting as the user account you connect; you cannot put your own App in its place. The default here is to connect your personal account. A cloud agent then acts with your identity. The token limits above do not apply to it, and what it cannot do depends on the vendor's limits and on rulesets that have no bypass. Section E of [redteam-machine.md](redteam-machine.md) tests exactly this: whether a cloud agent can create a release tag or approve a pull request. If either succeeds, there are two ways out. Connect a separate machine account for the cloud services, which costs one more seat. Or stop using the cloud path and run every stage in a local Docker Sandbox (`via = "sbx"`), which costs nothing but needs the Mac to be on with the conductor running there.
+**Cloud sessions are the exception.** Claude Code on the web and Codex cloud reach GitHub through the vendor's own integration, acting as the user account you connect; you cannot put your own App in its place. A cloud agent then acts with that account's identity. The token limits above do not apply to it, and what it cannot do depends on the vendor's limits and on rulesets that have no bypass. The checklist of layer 1 tests exactly this: whether a cloud agent can create a release tag or approve a pull request. If either succeeds, there are two ways out. Connect a separate machine account for the cloud services, which costs one more seat. Or stop using the cloud path and run every stage in a local sandbox (`via = "sbx"`), which costs nothing but needs the Mac to be on with the conductor running.
 
-## 4. Gates: what must hold before a merge
+## 6. Gates: what must hold before a merge
 
-Two rulesets apply to `main`. The first (`.github/rulesets/main.json`) has no bypass list and treats humans and agents alike:
+The rulesets are split by layer, so that layer 2 can be adopted alone. `agentctl rulesets 2` applies three of them; `agentctl rulesets 3` applies a fourth.
 
-- No direct push, no force push, no deletion. Merging only through a PR, by squash. The branch must be up to date with main.
-- All five required checks green. Each must be reported by the GitHub Actions app (`integration_id: 15368` in the ruleset), so a status of the same name from another source does not count. (**To verify**.)
+Layer 2. The first, `main`, has no bypass list and treats humans and agents alike:
+
+- No direct push, no force push, no deletion. Merging only through a pull request, by squash.
 - When a path listed in CODEOWNERS is touched, an owner (a human) must approve. A new push invalidates earlier approvals.
 
-The second (`.github/rulesets/main-merge.json`) restricts who may update `main` at all: repository admins and the Conductor App. It is what stops an agent's push token from merging a green PR. Its bypass list exempts those two from this ruleset only, not from the first. (**To verify**: that the two rulesets layer this way.)
+The second, `main-merge`, restricts who may update `main` at all: repository admins and the Conductor App. Its bypass list exempts those two from this ruleset only, not from the others. The third, `release-tags`, lets only admins create, move or delete `v*` tags.
 
-| Check | What it verifies | Judged by |
+Layer 3. The fourth, `main-checks`, requires all five checks green, with the branch up to date with main, each reported by the GitHub Actions app (`integration_id: 15368`), so a status of the same name from another source does not count. It is applied only after the caller workflows are on the default branch and have run, because it requires checks they produce; applied earlier, it would block every pull request.
+
+| Check as GitHub reports it | What it verifies | Judged by |
 |---|---|---|
-| `ci` | Lint, all tests | Program |
-| `security` | Secret scanning, static analysis | Program |
-| `spec-verify` | Traceability: every approved test case maps to a test that actually ran and passed, and one that has passed may not disappear. Red-green: the story's tests fail on main, as reported by the test runner, and pass on the branch | Program |
-| `risk-gate` | Risk tiering; T2 needs a human approval of the current commit | Program + human |
-| `agent-review` | A different agent's review of the implementation and of how faithful the tests are | Agent |
+| `ci / ci` | Lint, all tests | Program |
+| `security / security` | Secret scanning, static analysis | Program |
+| `ci / spec-verify` | Traceability: every approved test case maps to a test that actually ran and passed, and one that has passed may not disappear. Red-green: the story's tests fail on main, as reported by the test runner, and pass on the branch | Program |
+| `risk-gate / risk-gate` | Risk tiering; T2 needs a human approval of the current commit | Program and human |
+| `agent-review` (a commit status) | A different agent's review of the implementation and of how faithful the tests are | Agent |
 
-`spec-verify` and `risk-gate` are run by **the base branch's copy of the tools, with the base branch's policy**, so a PR cannot change the rules that judge it. That copy is started as `python3 -I tools/run.py`. `-I` keeps the current directory and `PYTHONPATH` off Python's import path. Without it, a file named `agentctl.py` or `json.py` in the PR's tree would be imported in place of the real module, because the judging job works inside that tree. `spec-verify` itself runs none of the PR's code: the tests run in the `ci` job, and the results are handed to `spec-verify` as files for judgement. Those files were produced by a job that ran the PR's code, so `spec-verify` treats them as untrusted input. The artifact is unpacked in the runner's temp directory, outside both checkouts. Only plain `*.xml` files and `collected.json` are passed on, and a symbolic link anywhere in the artifact fails the job. The base branch, which supplies the judge, is checked out last. An earlier version unpacked the artifact into the PR's checkout, where a symbolic link could have redirected files into the judge's checkout. This protects the judge, not the content of the results, which is still whatever that job wrote; see the limits at the end of the section on tests below. (**To verify**: how `actions/download-artifact` behaves with a hostile archive.)
+The names are "caller job / job", because the project's caller workflows call the kit's reusable ones. `layer-3-ci.md` explains them.
 
-Only PRs into `main` are judged. `ci`, `security` and `risk-gate` are triggered by PR events only for that base (`branches: [main]`). `risk-gate` also runs on a review, and a review event cannot be filtered by base branch, so its first step fails when the PR's base is not the default branch. It must fail there, not be skipped: GitHub counts a skipped job as a passed required check, and that result would stay on the commit after the PR is retargeted. A status earned against another base must not exist on a commit that later targets `main`. A PR that is retargeted to `main` without a push has no `ci`, `security` or `spec-verify` result, because those workflows do not run on a change of base, so it stays blocked until the next push, which runs everything against `main`. (**To verify**.)
+**The judges are not under the pull request's control.** `spec-verify` and `risk-gate` read the project's settings from the **base branch**, and run the kit at the pinned SHA, so a pull request cannot change the rules that judge it. `ci` reads them from the pull request, because it runs the pull request's code anyway. `spec-verify` itself runs none of the pull request's code: the tests run in the `ci` job, and the results are handed to `spec-verify` as files for judgement. Those files were produced by a job that ran the pull request's code, so `spec-verify` treats them as untrusted input. The artifact is unpacked in the runner's temporary directory, outside both checkouts, only plain `*.xml` files and `collected.json` are passed on, and a symbolic link anywhere in the artifact fails the job. This protects the judge, not the content of the results, which is still whatever that job wrote; see the limits below.
 
-The conductor opens a story's PR as a draft. On a draft, `ci` runs lint only, and `security` and `spec-verify` are skipped. GitHub counts a skipped check as passed. That is acceptable only because a draft cannot be merged, and because marking it ready (`ready_for_review`) triggers a full run on the same commit. When the implementation stage is complete, the conductor marks it ready for review, and only then do the full gates run. This saves Actions budget; see section 6.
+**Only pull requests into `main` are judged.** `risk-gate` also runs on a review, and a review event cannot be filtered by base branch, so its first step fails, rather than skips, when the pull request's base is not the default branch. GitHub counts a skipped job as a passed required check, and that result would stay on the commit after the pull request is retargeted. A pull request retargeted to `main` without a push has no `ci`, `security` or `spec-verify` result, so it stays blocked until the next push.
+
+**Drafts.** The conductor opens a story's pull request as a draft. On a draft, `ci` runs lint only, and `security` and `spec-verify` are skipped. GitHub counts a skipped check as passed. That is acceptable only because a draft cannot be merged, and because marking it ready (`ready_for_review`) triggers a full run on the same commit. When the implementation stage is complete, the conductor marks it ready, and only then do the full gates run. This saves Actions budget.
 
 ### Risk tiers
 
-`policy/risk-tiers.toml`:
+Set by `[risk.*]` in `agentdev.toml`:
 
-- **T0** Documentation only. Green checks are enough.
+- **T0** Documentation only (`[risk.t0] paths`). Green checks are enough.
 - **T1** A code change that belongs to an approved story. Passing checks and agent review are enough.
-- **T2** Needs human approval. This covers: the guardrails themselves (`.github/`, `policy/`, `tools/`, `prompts/`, the scanner configuration such as `.gitleaks.toml` and `.semgrepignore`, and so on), specs and sprints, high-risk code paths (auth, payments, migrations, infra), a change to one of the dependency manifests and lock files listed in `policy/risk-tiers.toml` (common manifests, any `*.lock`, `*.lockb`, `*.lockfile`, `*.sum` or `*.resolved`, and registry configuration such as `.npmrc` and `pip.conf`; a list the project must extend for its own stack), a diff over the size threshold, and a code change that belongs to no story.
+- **T2** Needs human approval. This covers: the guardrails themselves (`.github/**`, `agentdev.toml`, agent settings, `AGENTS.md`, `CLAUDE.md`, the scanner configuration, and so on), specs, sprints and product documents (`human_gated`), the project's high-risk code paths (`high_risk`: auth, payments, migrations, infrastructure by default; a list the project must set for its own layout), a change to a dependency manifest or lock file (`dependency_manifests`, a list the project must extend for its own stack), a diff over the size thresholds, and a code change that belongs to no story.
 
 Test files are not T0. Weakening a test is a change in behaviour.
 
-The changed paths are read from `git diff -z`. Without `-z`, git quotes a path that contains unusual characters (non-ASCII ones, for example), and a quoted path would match no pattern in the policy.
+The changed paths are read from `git diff -z`. Without `-z`, git quotes a path that contains unusual characters, and a quoted path would match no pattern.
 
-`risk-gate` publishes the tier twice. The label `tier:T0`, `tier:T1` or `tier:T2` on the PR is for people. The commit status `risk-tier/T0`, `risk-tier/T1` or `risk-tier/T2` on the head commit is what the conductor reads when it decides whether it may enable auto-merge. An agent's token has issues: write and can edit labels, but it cannot write a commit status. When a commit carries more than one such status, the strictest wins; a commit with none is treated as T2. The status is on a commit, not on a PR, so one commit can carry statuses from more than one run; taking the strictest can only make the conductor more cautious. (**To verify**: that these statuses appear in `statusCheckRollup`, which is where the conductor reads them.)
+`risk-gate` publishes the tier twice. The label `tier:T0`, `tier:T1` or `tier:T2` on the pull request is for people. The commit status `risk-tier/T0`, `risk-tier/T1` or `risk-tier/T2` on the head commit is what the conductor reads when it decides whether it may enable auto-merge. An agent's token has issues: write and can edit labels, but it cannot write a commit status. When a commit carries more than one such status, the strictest wins; a commit with none is treated as T2.
 
 ### "The AI saying it will write test XYZ does not mean it really did"
 
-In a story you have approved, every test case has an ID (`TC-012-03`). Four layers of checks follow, and the first three do not depend on anything an agent says:
+In a story you have approved, every test case has an ID (`TC-012-03`, with the number of digits set by `[stories] id_digits`). Four layers of checks follow, and the first three do not depend on anything an agent says:
 
-1. **Traceability.** The test name must carry the TC ID. CI reads the JUnit XML that the test runner outputs and confirms that every ID has at least one test that actually ran and passed. Tests that are skipped, that do not exist, or that are only mentioned in a comment do not count. The basis is the execution result, not a search of the source code. As shipped, `make test` runs Python's unittest over `tests/` through `tools/junit_unittest.py` and writes `reports/junit/unittest.xml`, so a new project produces JUnit XML before it has chosen a stack. In that runner, a test marked `expectedFailure` whose assertion fails is reported as skipped, so it never counts as a passing test case.
-2. **Red-green.** The PR's test files are overlaid on a clean checkout of main and run there, and they must fail. On the PR they must pass. An empty test such as `assert True` passes on main already, and is therefore blocked. The run on main first executes `setup_cmd` from `policy/project.toml`, so that a test does not fail there merely for lack of dependencies. "Red" has to be something the test runner reported. A test that was skipped on main is not accepted as red. If the run on main produced no report at all, the check fails, because nothing was shown. The check also fails when `setup_cmd` itself failed on main, because a failing test then shows nothing. A test that is missing from a report that does exist is accepted as red only when a failure or an error in that report belongs to one of the story's overlaid test files. It is matched by the file's name without its extension, looked for in the class, name or file of the failed test. The usual cause is that the file could not be imported before the implementation exists, and the runner records that as an error named after the file. An unrelated failure elsewhere on main does not count. If no failure belongs to the story's test files, its tests simply did not run, and the check fails. The exit status of the setup command (`setup_exit` in `collected.json`) and the JUnit files are written by the job that ran the PR's code. So these checks catch honest mistakes, and they are subject to the limit described below: results can be fabricated.
-3. **No disappearing.** A TC that passed on main must still pass, even if its spec was deleted in the same change. The only way to drop one is to list it in `docs/specs/retired.toml` (`retired = ["TC-012-03"]`). That file and the specs are protected by CODEOWNERS, so an agent cannot quietly delete a TC. The comparison uses up to five of the newest completed `ci` runs on main that have results, whatever those runs concluded, and a TC that passed in any of them must still pass. Insisting on a green run would make a red main impossible to repair. Taking only the newest run would let one partial run on main make older coverage forgettable. A run whose artifact is absent or expired is skipped. A listing or a download that fails makes the job fail; it is not mistaken for "no history". If no run has results (a new project, or the artifacts have expired after 90 days), `spec-verify` only warns: there is nothing to compare against.
-4. **Fidelity audit.** The review agent (different from the agents that wrote the tests and the implementation) judges each TC one by one: do the test's assertions really verify the behaviour described? This layer covers the case the first three cannot see: the test exists and goes red and green, but verifies the wrong thing.
+1. **Traceability.** The test name must carry the TC ID. CI reads the JUnit XML that the test runner outputs and confirms that every ID has at least one test that actually ran and passed. Tests that are skipped, that do not exist, or that are only mentioned in a comment do not count. The basis is the execution result, not a search of the source code. The project's `[tests] test_cmd` must run every test and write JUnit XML where `junit_glob` finds it; the kit ships a unittest wrapper (`agentctl junit-unittest`) for Python projects. In that wrapper, a test marked `expectedFailure` whose assertion fails is reported as skipped, so it never counts as a passing test case.
+2. **Red-green.** The pull request's test files, and any file that mentions the story's TC ids, are overlaid on a clean checkout of main and run there, and they must fail. On the pull request they must pass. An empty test such as `assert True` passes on main already, and is therefore blocked. The run on main first executes `setup_cmd`, so that a test does not fail there merely for lack of dependencies. "Red" has to be something the test runner reported. A test that was skipped on main is not accepted as red. If the run on main produced no report at all, or `setup_cmd` itself failed there, the check fails, because nothing was shown. A test that is missing from a report that does exist is accepted as red only when a failure or an error in that report belongs to one of the story's overlaid test files, matched by the file's name without its extension. The usual cause is that the file could not be imported before the implementation exists. An unrelated failure elsewhere on main does not count.
+3. **No disappearing.** A TC that passed on main must still pass, even if its spec was deleted in the same change. The only way to drop one is to list it in `retired.toml` in the specs directory (`retired = ["TC-012-03"]`). That file and the specs are protected by CODEOWNERS, so an agent cannot quietly delete a TC. The comparison uses up to five of the newest completed `ci` runs on main that have results, whatever those runs concluded, and a TC that passed in any of them must still pass. A run whose artifact is absent or expired is skipped. A listing or a download that fails makes the job fail; it is not mistaken for "no history". If no run has results (a new project, or the artifacts have expired after 90 days), `spec-verify` only warns.
+4. **Fidelity audit.** The review agent (a different session from those that wrote the tests and the implementation) judges each TC one by one: do the test's assertions really verify the behaviour described? This layer covers the case the first three cannot see: the test exists and goes red and green, but verifies the wrong thing.
 
-The first three layers are run by the single check `spec-verify`.
+The first three layers are run by the single check `spec-verify`. After the merge, the `evidence` workflow posts the "AC → TC → test → result" table to the story's issue. You read that table, not the code.
 
-After the merge, the `evidence` workflow posts the "AC → TC → test → result" table to the story's issue. You read that table, not the code.
-
-This guarantee has three limits. First, it ensures that every TC you approved has a running test that changes with the behaviour, but it does not guarantee that the list of TCs is itself complete. The completeness of the list depends on the PO's questions and on your reading when you approve the story. Second, the test results are produced by the PR's code, and an agent is able to write a fake results file directly. There is no hard defence against this. It relies on the `Makefile` being protected, the review agent and the weekly spot check. Third, red-green shows that the story's tests do not pass on main. It does not show why. A test written to behave differently on main than on the branch, for example by checking whether a file exists, can still satisfy it, because tests are PR code. Catching that is the job of the review's audit of each test case, the fourth layer.
+This guarantee has three limits. First, it ensures that every TC you approved has a running test that changes with the behaviour, but it does not guarantee that the list of TCs is itself complete. That depends on the PO's questions and on your reading when you approve the story. Second, the test results are produced by the pull request's code, and an agent is able to write a fake results file directly. There is no hard defence against this. It relies on `test_cmd` and the files it runs being guarded, the review agent and the weekly spot check. Third, red-green shows that the story's tests do not pass on main. It does not show why. A test written to behave differently on main than on the branch, for example by checking whether a file exists, can still satisfy it. Catching that is the job of the fidelity audit.
 
 ### The strength of `agent-review`
 
 This is the only one of the five checks judged by an agent, and also the weakest. That should be stated honestly.
 
-Claude's review runs as a workflow, `agent-review.yml`, started by the conductor from the default branch. The reviewer runs in a checkout of the default branch. The PR is checked out beside it, in `./pr`, as data, so Claude Code's settings and hooks never come from the PR. The workflow first checks that the PR is open, comes from this repository and targets the default branch. A review is for one commit: the conductor passes the commit it recorded in the dispatch marker (the `sha` input). If the PR's head is a different commit when the job starts, the job fails before reviewing, nothing is published, and the conductor asks again for the new head. The reviewing job has a read-only token. `--tools` limits the tools that exist in the session to Read, Grep, Glob, Write and Bash, and `--allowedTools` pre-approves only three read-only `git` commands for Bash. It writes its verdict under `$RUNNER_TEMP`, outside both checkouts. A separate `publish` job, which never sees the PR's files, posts the findings and sets the status. The verdict counts only if the review step itself succeeded; otherwise the status is failure, never pass. The implementation agent's token cannot write a commit status, so it cannot forge one. A named developer's review uses only `CLAUDE_CODE_OAUTH_TOKEN_<LOGIN>`. The plain name is used only for a story that names no developer. On GitHub Actions the conductor checks that this token exists before it dispatches the review, and a missing one fails the dispatch before anything is written. A local conductor cannot see GitHub's secrets. From there the workflow starts, the review step has no credential and fails, and `publish` writes a failure status. (**To verify**: the `github_token` input and the `--allowedTools` argument of `anthropics/claude-code-action`, and that `--tools` restricts the tools that are available.)
+Claude's review runs as a workflow, `agent-review`, started by the conductor from the default branch. The reviewer runs in a checkout of the default branch, and the pull request is checked out beside it, as data, so Claude Code's settings and hooks never come from the pull request. The workflow first checks that the pull request is open, comes from this repository and targets the default branch. A review is for one commit: the conductor passes the commit it recorded in the dispatch marker. If the head is a different commit when the job starts, the job fails before reviewing and the conductor asks again for the new head. The reviewing job has a read-only token and a restricted tool list, and writes its verdict outside both checkouts. A separate `publish` job, which never sees the pull request's files, posts the findings and sets the status. The verdict counts only if the review step itself succeeded; otherwise the status is failure, never pass. The implementation agent's token cannot write a commit status, so it cannot forge one.
 
-Codex's review comes from its GitHub integration and is turned into a status by the `bridge` job. If the review is instead done in an ordinary cloud session, the reviewer and the implementer may be the same GitHub identity, and in that case the two cannot be told apart by identity. For a review that is started by a comment or runs in a local sandbox, the prompt names the commit to review and tells the reviewer to stop if the PR's head is a different commit. That is an instruction to an agent, not an enforcement like the workflow's check.
+For a reviewer that is not Claude (Codex, for example), a bridge job turns a review posted by a bot listed in the repository variable `REVIEW_BOTS` into the status. If a review is instead done in an ordinary cloud session, the reviewer and the implementer may act as the same GitHub identity, and the two cannot be told apart by identity. For a review started by a comment or run in a local sandbox, the prompt names the commit to review and tells the reviewer to stop if the head is a different commit. That is an instruction to an agent, not an enforcement like the workflow's check.
 
-What remains is the reason this check is the weakest. The reviewer reads untrusted text: the diff, the commit messages and the files of the PR. That text can talk it into a wrong verdict. The isolation above limits what a misled reviewer can do. It does not limit what it concludes.
+What remains is the reason this check is the weakest. The reviewer reads untrusted text: the diff, the commit messages and the files of the pull request. That text can talk it into a wrong verdict. The isolation limits what a misled reviewer can do. It does not limit what it concludes.
 
 The design therefore lets no hard guarantee depend on `agent-review`. High-risk changes have human approval, and the existence and validity of tests have mechanical checks. Agent review provides a check at the semantic level, and the cost of a wrong pass is bounded by the other gates.
 
-## 5. From one line to production
+## 7. From one line to production
 
 ```
 Stage 0  You say one sentence (PO chat, or write it into the roadmap)
-Stage 1  PO agent produces the story            → you approve the spec PR 【Gate 1】
+Stage 1  PO agent produces the story            → you approve the spec pull request 【Gate 1】
 Stage 2  design   the design agent writes the design document
 Stage 3  tests    the test agent writes tests from the story alone (they must be red at this point)
 Stage 4  impl     the implementation agent turns the tests green
 Stage 5  review   the review agent reviews the implementation and audits the tests
-Stage 6  all five checks green → auto-merge → evidence table posted to the issue
+Stage 6  all five checks green → merge → evidence table posted to the issue
 Stage 7  you push a v* tag → deploy to production                         【Gate 2】
 ```
 
-Each stage is a brand-new agent session with no memory of the previous session. Everything it needs is in the spec, the story issue, the branch and the commit history. The instructions are in `prompts/` and are vendor-neutral.
+Each stage is a brand-new agent session with no memory of the previous one. Everything it needs is in the spec, the story issue, the branch and the commit history, and its instructions are the kit's prompt for that stage.
 
 ### AI Product Owner
 
 Your requirement is usually one sentence. The PO (`prompts/product-owner.md`) turns it into a story you can approve within two minutes.
 
-- It first reads the domain documents in `docs/product/` and the related existing stories, and checks whether the new requirement conflicts with existing behaviour.
+- It first reads the domain documents under `[paths] product` and the related existing stories, and checks whether the new requirement conflicts with existing behaviour.
 - It asks at most five questions, and only those that "would change what is to be built and are hard to undo afterwards": payment flow and order states, what happens after a failure or a rejection, who has permission, data retention and outbound notifications. It decides the rest itself and lists those decisions as assumptions.
-- It produces three files: `story.md` (English, what agents implement and review against), `story-zh-TW.md` (Traditional Chinese, the version you read and approve) and `spec.toml` (machine-readable). Each of the two stories is limited to 80 lines. For an example see `docs/specs/000-example/`, which is the result of the sentence about paying by bank transfer with proof of payment.
+- It produces `story.md` (English, what agents implement and review against), `story-<lang>.md` (the language you approve in, `zh-TW` by default, omitted when `[stories] translation` is empty) and `spec.toml` (machine-readable). Each story file is limited to `max_lines` (80 by default). For an example see `examples/specs/000-example/`.
 
-You approve the Chinese and the agents read the English. The gap in meaning between the two is the main risk of bilingual stories. It is handled in three layers. `spec-lint` checks that the AC and TC IDs of the two files are the same and in the same order, and that the sections are the same. CI checks that the two files must change together in the same PR. The PO compares them item by item after writing, and the review agent from the other vendor compares them item by item once more, treating a difference in meaning as blocking. The first two layers are mechanical checks. The third is an agent's judgement, not a hard guarantee. If the two differ, the English version governs, because that is the version actually implemented.
+You approve the translation and the agents read the English. The gap in meaning between the two is the main risk of bilingual stories. It is handled in three layers. `spec-lint` checks that the AC and TC IDs of the two files are the same and in the same order, and that the sections are the same. CI checks that the two files change together in the same pull request. The PO compares them item by item after writing, and the review agent compares them again, treating a difference in meaning as blocking. The first two layers are mechanical. The third is an agent's judgement, not a hard guarantee. If the two differ, the English version governs, because that is the version actually implemented.
 
-Two modes. **chat**: you talk with it on your phone or desktop, which suits requirements you want to discuss in depth. **async**: you only add a line to `docs/product/roadmap.md`, the conductor dispatches the PO to draft a spec PR, the questions are written in the PR description, and you answer with review comments. When you come back, what you face is a spec you can approve directly or answer briefly. Unapproved spec PRs are capped at three, to avoid a pile-up.
+Two modes. **chat**: you talk with it on your phone or desktop, which suits requirements you want to discuss in depth. **async**: you only add a line to the roadmap, the conductor dispatches the PO to draft a spec pull request, the questions are written in the description, and you answer with review comments. Unapproved spec pull requests are capped at `max_open_spec_prs` (three by default), to avoid a pile-up.
 
-You approve by approving that PR on GitHub. The mobile app is enough. Labels are not used as the approval signal, because agents can change labels. The conductor opens spec and sprint PRs ready for review. Once you have approved one, the conductor enables auto-merge on it, and it merges by itself when the checks are green. This is your decision, not the conductor's judgement, so it does not depend on `auto_merge_tiers`. Before this, nothing merged an approved spec or sprint PR. (**To verify**: the review decision GitHub reports for an approved PR, and the Conductor App enabling auto-merge.)
+You approve by approving that pull request on GitHub. The mobile app is enough. Labels are not used as the approval signal, because agents can change labels. The conductor opens spec and sprint pull requests ready for review. Once you have approved one, the conductor enables auto-merge on it, and it merges by itself when the checks are green. This is your decision, not the conductor's judgement, so it does not depend on `auto_merge_tiers`.
 
 ### Role assignment
 
-`policy/roles.toml` sets, per developer, which harness each stage uses, with a fallback order. The principle is for the reviewer and the implementer to be from different vendors. Whose story it is comes from the approved sprint file: `assignee` is the default, and an optional `[owners]` table names another developer for single stories (`"012" = "alice"`). Issue assignees are not used.
+`[roles.developers.<login>.stages]` in `agentdev.toml` sets, per developer, which harness each stage uses, with a fallback order; `default` covers a story with no assignee and anyone not listed. Whose story it is comes from the approved sprint file: `assignee` is the default, and an optional `[owners]` table names another developer for single stories. Issue assignees are not used. `[roles.harness.<name>]` says how each harness is started: `via = "http"` (a cloud scheduled task's API trigger), `"comment"` (a mention that starts a cloud task, for example Codex cloud) or `"sbx"` (a fresh local sandbox, only while the conductor runs on that Mac). Nothing here assumes a particular vendor: a project that uses only Codex lists only Codex.
 
-The practical constraint is quota. Implementation is the most token-hungry stage and review the lightest, so put implementation on a person's larger subscription and review on the smaller one. Three common setups:
+The principle is for the reviewer and the implementer to be different sessions, and from different vendors where there are several. The practical constraint is quota. Implementation is the most token-hungry stage and review the lightest, so put implementation on a person's larger subscription and review on the smaller one.
 
 | Setup | Who reviews | What you give up |
 |---|---|---|
@@ -198,221 +241,216 @@ The practical constraint is quota. Implementation is the most token-hungry stage
 | One person, several vendors | A different vendor from the implementer | Nothing, as long as quota lasts on both |
 | Several people, each with their own AI | Whatever each person's own set allows | People with one vendor get same-vendor review on their stories |
 
-In every setup a T2 change still goes to a human. With one person, that human is also the director. After a plan upgrade, changing the settings is all that is needed.
+In every setup a T2 change still goes to a human. With one person, that human is also the director.
 
 Separating the roles into different sessions is not enough if every session holds the same powers. So each stage's sandbox is given only what that stage needs:
 
 | Stage | Its GitHub token can | Network | May edit |
 |---|---|---|---|
-| design, tests, impl (and its fix and conflict runs) | Push branches; comment, label. Cannot open, retarget or review a PR | Source control, model providers, package registries | Code and tests; not guardrails, not approved specs |
-| review, triage | Read the repo; comment, label, review. **Cannot push** | Source control and model providers only | Nothing it could deliver anyway |
-| product-owner, planner | Push branches; comment, label. Cannot open, retarget or review a PR | Source control and model providers only | Specs, sprints, product documents; not guardrails |
+| design, tests, impl (and its fix and conflict runs) | Push branches; comment, label. Cannot open, retarget or review a pull request | Source control, model providers, package registries | Code and tests; not guardrails, not approved specs |
+| review, triage | Read the repository; comment, label, review. **Cannot push** | Source control and model providers only | Nothing it could deliver anyway |
+| product-owner, planner | Push branches; comment, label. Cannot open, retarget or review a pull request | Source control and model providers only | Specs, sprints, product documents; not guardrails |
 
-The first two columns are hard controls. GitHub mints an App token with a subset of the App's permissions, and the sandbox's network policy is set per sandbox, so a reviewing agent that tries to push is refused by GitHub, whatever its prompt or its own reasoning says. A sandbox is never reused, so a review sandbox cannot inherit the package registries that an implementation sandbox was allowed. The third column is the harness's deny rules, a soft layer. The table lives in `tools/agentctl/profiles.py` as constants, and a sandbox is set up from a copy of that file pinned outside the repo, so a branch cannot give itself more.
+The first two columns are hard controls. GitHub mints an App token with a subset of the App's permissions, and the sandbox's network policy is set per sandbox, so a reviewing agent that tries to push is refused by GitHub, whatever its prompt says. A sandbox is never reused, so a review sandbox cannot inherit the package registries that an implementation sandbox was allowed. The third column is the harness deny rules, a soft layer. The table lives in `tools/agentctl/profiles.py` as constants in the installed kit, so a branch cannot give itself more.
 
-Two limits. GitHub permissions are per repository, not per path: "the test writer must not touch the implementation" and "the implementer must not weaken a test" cannot be expressed in a token, and stay with `spec-verify`, CODEOWNERS and review. And this separation exists only on the Docker Sandboxes path. The Lima fallback, which is not part of the supported setup path, is one long-lived VM that every stage shares, and a cloud session acts with the account you connected, whatever the stage.
+Two limits. GitHub permissions are per repository, not per path: "the test writer must not touch the implementation" and "the implementer must not weaken a test" cannot be expressed in a token, and stay with `spec-verify`, CODEOWNERS and review. And this separation exists only on the sandbox path: a cloud session acts with the account you connected, whatever the stage.
 
-## 6. Continuous operation: the conductor
+## 8. Continuous operation: the conductor
 
-When you are away, it is the conductor that moves work forward.
+When you are away, the conductor moves work forward.
 
-### What it is
+### What it is, and why it is deterministic
 
-A program with no state and no LLM (`agentctl reconcile`). It can run in a terminal on your Mac, and it can run on GitHub Actions. On every run it reads the complete current situation: sprint, specs, issues, PRs, check results. It works out the next thing that should happen now, then does it. It remembers nothing itself. All memory is on GitHub (labels, issue links, hidden marker comments). So interruptions, reruns and missed events do no harm: the next run reaches the same conclusion.
+A program with no state and no LLM (`agentctl conductor`, which runs the reconcile logic in `tools/agentctl/reconcile.py`). On every pass it reads the complete current situation: sprint, specs, issues, pull requests, check results. It works out the next thing that should happen now, then does it. It remembers nothing itself. All memory is on GitHub (labels, issue links, hidden marker comments). So interruptions, reruns and missed events do no harm: the next pass reaches the same conclusion.
 
-What it reads back is not trusted blindly. A marker comment is believed only when it was written by the conductor's own login or by a human listed in `policy/roles.toml`. An agent can comment on issues, so a marker from anyone else is ignored. A story's PR is the open one, or else the merged one, from this repository into the default branch. Closed PRs, PRs into another base and PRs from another repository are never picked. Only the branch name the spec defines, `story/NNN-slug`, is the story's branch: a branch `story/NNN-other` is ignored and gets no PR. A PR from a branch into some other base does not count as that branch's PR, so the conductor still opens the real one.
+It is not a long-running LLM session, for these reasons. A long session's state is in its context. Context gets compacted and instructions are lost, a session cannot be fully restored after an interruption, its behaviour is hard to audit, and it consumes quota continuously. With the state on GitHub and a brand-new context for every judgement, these problems do not exist. The same input always gives the same result, uses no quota, and can be unit tested in full.
 
-### Where the conductor runs
+Experience with existing tools points the same way. For Gas Town, which uses an LLM as coordinator, the author says it stopped working after a model upgrade, with agents turning to modifying the harness itself over and over (secondary reports). The Claude Code agent teams documentation records that the lead finishes early and that task status lags behind and blocks downstream work. Anthropic's engineering article on long-running agents argues for starting every session from a brand-new context and keeping continuity in files and git. The closest to this design is OpenAI Symphony: a deterministic reconcile loop with the issue tracker as the source of truth. It supports only Codex and Linear, so the kit adopts its approach rather than its implementation.
 
-The conductor is a deterministic program, not an agent, so running it directly on your Mac is safe, and it uses no Actions budget. It refuses to start from a checkout whose `tools/`, `bin/`, `sandbox/` or `policy/` differ from the default branch; the hygiene rules in section 3 say what this check is worth.
+What it reads back is not trusted blindly. A marker comment is believed only when it was written by the conductor's own login or by a human listed in `[roles]`. An agent can comment on issues, so a marker from anyone else is ignored. A story's pull request is the open one, or else the merged one, from this repository into the default branch. Closed pull requests, pull requests into another base and pull requests from another repository are never picked. Only the branch name the spec defines, `story/NNN-slug`, is the story's branch.
 
-- **You are at the computer**: `bin/agentctl conductor here`. It polls every three minutes, and each time it reads the approved sprint, specs and policy from `origin/main`, not from the contents of your working directory. It acts on GitHub as the Conductor App, not as you. `bin/agentctl conductor here --dry-run` does one pass and prints the plan. It takes no lease and sets no variable, so GitHub Actions keeps running as it was.
-- **You are going out**: `bin/agentctl conductor away`, or just press Ctrl-C. This hands over to GitHub Actions.
-- **You close the laptop without handing over**: the local conductor renews a lease after every pass that worked. The scheduled Actions run, every four hours, reads it and takes over if it has not been renewed for more than 20 minutes.
+### Where it runs
 
-Two repo variables decide which side acts: `CONDUCTOR_HOME` (`local` or `actions`) and `CONDUCTOR_LEASE`, whose value is `<epoch seconds> <holder>`. The holder is `<developer>@<host>:<pid>`. The local conductor publishes the lease before it claims the role. It renews the lease only after a pass that worked, and only while the lease still names it: a pass that stopped because the lease moved does not renew the lease afterwards, the conductor stops. It hands over to Actions after three failed passes in a row, and stops as soon as the lease names someone else, for example a second local process. Both sides read the variables live, at the start of a pass and again before every dispatch they send, and a conductor stops its pass when the lease has moved. While `CONDUCTOR_HOME` is `local`, event-triggered runs on Actions are skipped and use no minutes. A scheduled run (every four hours) or a manually started one still starts. If it finds a fresh lease held for developer X, it dispatches the stories that the sprint file gives to other named developers, because the local conductor holds only X's credentials and leaves those stories alone. It also withdraws auto-merge where that is due and acts on a pause (see "Fuses"). It does nothing else. If the lease variables cannot be read, or the lease is fresh but names no developer (an older format), the run dispatches nothing and still handles halt and the withdrawal of auto-merge.
+The conductor runs on **one Mac only**, in a terminal: `agentctl conductor`. It polls every 180 seconds (`--interval`). Each pass it reads specs, sprint and `agentdev.toml` from a fresh worktree of `origin/main`, not from your working directory, and acts on GitHub as the Conductor App, not as you. `agentctl conductor --dry-run` does one pass, prints the plan and acts on nothing. Ctrl-C stops it.
 
-The lease is not a lock. Repository variables have no compare-and-set, so around a hand-over two conductors can overlap. Each re-reads the lease before every dispatch it sends and stops its pass if the lease has moved. This narrows the overlap to a dispatch that is already being sent. It does not close it: the same stage can be dispatched twice. A dispatch is recorded as a marker before the work is sent, and the marker is withdrawn if sending fails. So a dispatch can be duplicated, never lost.
+There is no GitHub Actions conductor, no lease and no hand-over. A lock file stops a second conductor for the same project on the same Mac. A second conductor on another Mac is not supported, and nothing detects it (a known limitation). When the Mac sleeps, or the terminal is closed, nothing advances. Agents already dispatched to the cloud keep working, but their pushes wait for the next pass to get a pull request, a review or a merge. After three failed passes in a row it waits 15 minutes between passes.
 
-On Actions, events are the main driver. `conductor.yml` is triggered by: the schedule (every four hours), a manual dispatch, the completion of `ci`, `risk-gate`, `notify` or `agent-review` (`workflow_run`), a PR closing (`pull_request_target`), a label changing on an issue, and a push to `main` that changes a sprint file or the roadmap. The schedule only catches stalls and missed events. There is deliberately no `pull_request`, `pull_request_review` or push-to-branch trigger. A workflow started by one of those can run the workflow file as it is on the branch, and a job that holds credentials must not be defined by a branch. A review still reaches the conductor: `risk-gate` re-runs on it, and the conductor listens for `risk-gate` completing. A Claude review verdict reaches it when the `agent-review` workflow completes. (**To verify**: `pull_request_target` and the `workflow_run` chain behave this way.)
+The conductor's credentials live outside the repository, in `~/.config/agent-dev/<owner>-<repo>/conductor.env`: the Conductor App's id and the path to its private key (`CONDUCTOR_APP_ID`, `CONDUCTOR_APP_KEY`), `DEVELOPER` (your GitHub login) and the dispatch secrets you use. A conductor on your Mac holds your credentials only. It dispatches the stories assigned to you and the unassigned ones, and defers a story assigned to another developer; a local sandbox (`via = "sbx"`) is only started on the Mac of the developer whose story it is.
 
-An agent's push is announced by `notify.yml`. It runs on a push to `story/**`, `spec/**`, `sprint/**` or `chore/**`, has no permissions and no secrets, and does nothing. The conductor reacts to its completion. It replaces `open-pr.yml`, which is gone: that workflow was triggered by the push itself and held the App's key.
+The GitHub Actions side has three jobs: the reusable workflows of layer 3, the daily director's brief (which also runs `agentctl budget`), and the secrets of the `conductor` environment that the review workflow needs. The environment's deployment branch rule allows the default branch only, so a run from any other ref is refused the secrets. Secrets must be created as environment secrets of `conductor`, not as repository secrets. A named developer's review uses only that developer's `_<LOGIN>` secret, and a missing one fails the dispatch before anything is written.
 
-The conductor opens the PRs (the `open-pr` action in `tools/agentctl/reconcile.py`). A story branch gets a draft. A spec, sprint or chore branch gets a PR that is ready for review. The author is the Conductor App, so a human can approve. After a human has approved a spec or sprint PR, the conductor enables auto-merge on it.
-
-The pipeline's secrets live in a GitHub environment named `conductor`, whose deployment branch rule allows the default branch only. The jobs that need them declare `environment: conductor`: `reconcile` in `conductor.yml`, `brief` in `brief.yml` and `claude` in `agent-review.yml`. A run from any other ref, a manual dispatch of a branch included, is refused the secrets by GitHub. So `CONDUCTOR_APP_PRIVATE_KEY` and every per-developer secret (`DISPATCH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_TRIGGER_URL`, `CLAUDE_TRIGGER_TOKEN`, each also in its `_<LOGIN>` form) must be created as environment secrets of `conductor`, not as repository secrets. For a story whose sprint file names a developer, only the `_<LOGIN>` form is used. The plain name is used for stories of `default`. It is never a silent fallback for another named developer: when that developer's secret is missing, the dispatch fails before anything is written, with a message that names the developer. Variables stay repository variables. (**To verify**: environments with deployment branch rules on a private repo on the Team plan.)
-
-A local run reads a file outside the repo: `~/.config/agent-dev/<owner>-<repo>/conductor.env`. It must define `CONDUCTOR_APP_ID`, `CONDUCTOR_APP_KEY` (the path to the Conductor App's private key on the Mac) and `DEVELOPER` (your GitHub login). It also holds the dispatch credentials you use: `CLAUDE_TRIGGER_URL`, `CLAUDE_TRIGGER_TOKEN`, `DISPATCH_TOKEN`. On your own Mac these plain names are used for your stories and for stories of `default`. `agentctl conductor here`, `away` and `status` all need the file. It used to be `.env.conductor` in the project root. It moved because a clone-mode sandbox can read every file in the project directory. A conductor on your Mac holds your credentials only. It dispatches the stories assigned to you and the unassigned ones, and defers a story assigned to another developer; `DEVELOPER` is how it knows who you are. The scheduled Actions run dispatches the stories it defers, as described above. So a local sandbox (`via = "sbx"`) is only started on the Mac of the developer whose story it is.
+The conductor opens the pull requests. A story branch gets a draft. A spec, sprint or chore branch gets a pull request that is ready for review. The author is the Conductor App, so a human can approve.
 
 ### Where the judgement about order comes from
 
 A program cannot judge which story should be done first. It does not need to, because the judgement happens elsewhere:
 
-**At planning time, an agent judges and you approve.** The planner (`prompts/planner.md`) reads all candidate stories and the code, and settles for each story its `depends_on` (stories that must be merged first), `touches` (the modules and shared resources it will change) and `priority`. These are written in `spec.toml` and come to you for approval with the sprint PR. What you approve is the scope and the priority order.
+**At planning time, an agent judges and you approve.** The planner (`prompts/planner.md`) reads all candidate stories and the code, and settles for each story its `depends_on` (stories that must be merged first), `touches` (the modules and shared resources it will change) and `priority`. These are written in `spec.toml` and come to you for approval with the sprint pull request. What you approve is the scope and the priority order.
 
-**At run time, a program computes.** A story may start when: the stories it depends on are all merged, it is not marked blocked, its `touches` do not intersect those of stories in progress, and the limit on stories in progress at once is not exceeded. Those that qualify are ordered by priority, by the number of downstream stories they unblock, and by number. A story that has started and then has to wait for a dependency added later by triage is parked: it holds no slot and no claim on its `touches`, so the story it waits for can start even when both touch the same thing. When several started stories become eligible again at once (the dependency that was added has merged, or a person unblocked them), the lowest ids are given new work first, within `wip_limit` and never two that touch the same thing. The rest wait until one of those is merged. The same input always gives the same result, uses no quota, and can be unit tested in full.
+**At run time, a program computes.** A story may start when: the stories it depends on are all merged, it is not marked blocked, its `touches` do not intersect those of stories in progress, and `wip_limit` is not exceeded. Those that qualify are ordered by priority, by the number of downstream stories they unblock, and by number. A story that has started and then has to wait for a dependency added later by triage is parked: it holds no slot and no claim on its `touches`. When several started stories become eligible again at once, the lowest ids are given new work first, within `wip_limit` and never two that touch the same thing.
 
 **When something goes wrong, a short-lived triage session judges.** Planned dependencies will contain mistakes. A common one is discovering halfway through that another, unfinished story is needed. When the conductor detects a stage failing repeatedly or stalling, it starts a triage agent (`prompts/triage.md`). It can do only three things: add a "blocked by" link, ask for a retry and explain what to do differently, or escalate to you with options. It cannot change the spec, cannot change the sprint scope, and cannot touch code or tests.
 
-### Why not keep a long-running LLM session as supervisor
-
-A long session's state is in its context. Context gets compacted and instructions are lost, a session cannot be fully restored after an interruption, its behaviour is hard to audit, and it consumes quota continuously. With the state on GitHub and a brand-new context for every judgement, these problems do not exist.
-
-Experience with existing tools points the same way. For Gas Town, which uses an LLM as coordinator, the author says it stopped working after a model upgrade, with agents turning to modifying the harness itself over and over (this item comes from secondary reports). The Claude Code agent teams documentation records that the lead finishes early and that task status lags behind and blocks downstream work. Anthropic's engineering article on long-running agents argues for starting every session from a brand-new context and keeping continuity in files and git. The closest to this design is OpenAI Symphony: a deterministic reconcile loop with the issue tracker as the source of truth. It supports only Codex and Linear, so this repo adopts its approach rather than its implementation.
-
 ### What it does and does not do
 
-- When an agent has pushed a branch that has no PR yet, it opens one.
-- When a story is waiting on you, it goes around it and works on something else. A story waiting on you does not take one of the slots for stories in progress. A red `risk-gate` (a T2 change waiting for approval) is such a wait. It is never reported as "ready to merge".
+- When an agent has pushed a branch that has no pull request yet, it opens one.
+- When a story is waiting on you, it goes around it and works on something else. A story waiting on you does not take a slot. A red `risk-gate` (a T2 change waiting for approval) is such a wait. It is never reported as "ready to merge".
 - When every unfinished story in the sprint is stuck on you, it stops everything and notifies you once.
-- When the sprint is complete and the next one is not yet approved, development stops. Only the drafting of specs continues. It does not expand the scope on its own. It asks for the next sprint to be drafted (`draft-next-sprint`) once the share of merged stories reaches `draft_next_sprint_at`; a short sprint that goes from below that threshold straight to complete still gets it.
-- When a PR falls behind main, it updates the branch. When there is a conflict, it dispatches a conflict-resolution task.
-- A fix, a conflict resolution and a review are tied to the commit they were dispatched for. A fix counts as in flight until the branch moves. Every new commit needs its own review verdict; the `done:review` label does not decide it.
-- A stage that cannot be sent from where the conductor runs (a local sandbox while the conductor is on Actions, or another developer's story while the conductor runs on your Mac) is deferred, and nothing is written.
-- A dependency merged in an earlier sprint counts as satisfied. It is recognised by the exact branch name its spec defines. After a triage "retry", a story still waits for the dependencies triage added.
-- With `--dry-run` it prints what it would do and creates nothing, not even the tracking issues.
+- When the sprint is complete and the next one is not yet approved, development stops. Only the drafting of specs continues. It does not expand the scope on its own. It asks for the next sprint to be drafted once the share of merged stories reaches `draft_next_sprint_at`.
+- When a pull request falls behind main, it updates the branch. When there is a conflict, it dispatches a conflict-resolution task.
+- A fix, a conflict resolution and a review are tied to the commit they were dispatched for. A fix counts as in flight until the branch moves. Every new commit needs its own review verdict.
+- A stage that cannot be sent from where the conductor runs (a local sandbox for another developer's story) is deferred, and nothing is written.
+- A dependency merged in an earlier sprint counts as satisfied. It is recognised by the exact branch name its spec defines.
 - When main turns red, it stops dispatching and dispatches only one repair task.
-- When a harness runs out of quota, it switches to the fallback. When all are exhausted, it waits.
-- When all gates pass, it enables auto-merge, but only for the tiers listed in `auto_merge_tiers` in `policy/conductor.toml`. The tier comes from the `risk-tier/*` commit status, not from the label. Auto-merge is enabled only for the commit the decision was made about (`gh pr merge --match-head-commit`): if the branch has moved, GitHub refuses and the next pass decides again. (**To verify**.) GitHub keeps an auto-merge request on a PR across later pushes. So on every pass the conductor checks each story PR that has auto-merge on, and withdraws it (`disable-auto-merge`) when the PR no longer meets what it was enabled for: not a draft, no human review outstanding, the four mechanical checks and `agent-review` green, and its tier in `auto_merge_tiers`. It enables it again when the PR qualifies. Between a push and the conductor's next pass the request is still armed; section 10 says what that window can let through.
+- When a harness runs out of quota, it switches to the fallback in `[roles]`. When all are exhausted, it waits.
+- When all gates pass, it enables auto-merge, but only for the tiers listed in `auto_merge_tiers`. The tier comes from the `risk-tier/*` commit status, not from the label; only statuses described as "pull request #N into BRANCH" for this pull request and the default branch count. Auto-merge is enabled only for the commit the decision was made about (`gh pr merge --match-head-commit`): if the branch has moved, GitHub refuses and the next pass decides again. GitHub keeps an auto-merge request on a pull request across later pushes, so on every pass the conductor checks each story pull request that has auto-merge on, and withdraws it when the pull request no longer meets what it was enabled for: not a draft, no human review outstanding, the four mechanical checks and `agent-review` green, and its tier in `auto_merge_tiers`. It also withdraws it when main is red, when the plan is broken, or when the story is not in the sprint, even if the pass returns early. It enables it again when the pull request qualifies. Between a push and the next pass the request is still armed; the limitations say what that window can let through.
 
 ### Fuses
 
-- **Kill switch**: set the repo variable `CONDUCTOR_PAUSED` to `true`. It is read live on every pass, through the API, by the Actions job and by the local conductor, so a local conductor that is already running halts within one pass. While paused, the conductor does not dispatch and does not open PRs. It does one thing: it switches off auto-merge on every open PR that has it on, because GitHub would otherwise merge such a PR by itself when its checks turn green. That happens when a conductor next runs, not at the moment you set the variable. Whichever conductor runs next does it, including an Actions run that finds a fresh local lease. For an immediate stop, also run `gh pr merge NUMBER --disable-auto` yourself. A variable that cannot be read is not taken as unset. `CONDUCTOR_PAUSED`, `CONDUCTOR_BOT` and `CONDUCTOR_QUOTA` are read first and together, and if any of them cannot be read the pass behaves as paused and still withdraws auto-merge. Two things have to be kept apart. Dispatching stops as soon as a pass sees the pause or fails to read a variable. Auto-merge that is already switched on has been withdrawn only once a pass could list the PRs and call GitHub successfully. If GitHub's API is failing altogether, nothing can be withdrawn, and the manual command remains the fallback. The lease is read live in the same way. (**To verify**: `--disable-auto` run as the Conductor App.)
-- Limits: the number of stories in progress at once, the number of PRs opened per day, the number of retries of the same stage, the number of fix and review rounds, the number of triage sessions. Beyond a limit it escalates to you. It does not retry without end.
+- **Kill switch**: set the repository variable `CONDUCTOR_PAUSED` to `true`. It is read live on every pass, through the API, so a conductor that is already running halts within one pass. While paused, the conductor does not dispatch and does not open pull requests. It does one thing: it switches off auto-merge on every open pull request that has it on, because GitHub would otherwise merge such a pull request by itself when its checks turn green. That happens at the next pass, not at the moment you set the variable, and not at all while the Mac is off. For an immediate stop, also run `gh pr merge NUMBER --disable-auto` yourself. A variable that cannot be read is not taken as unset (a malformed `CONDUCTOR_QUOTA` entry is ignored entry by entry): `CONDUCTOR_PAUSED`, `CONDUCTOR_BOT` and `CONDUCTOR_QUOTA` are read first and together, and if any of them cannot be read the pass behaves as paused and still withdraws auto-merge. Dispatching stops as soon as a pass sees the pause or fails to read a variable. Auto-merge that is already switched on has been withdrawn only once a pass could list the pull requests and call GitHub successfully.
+- **Limits**, all under `[conductor]`: stories in progress at once (`wip_limit`), pull requests opened per day (`max_prs_per_day`), dispatches of the same stage (`max_attempts`), fix and review rounds (`max_fix_rounds`), triage sessions per story (`max_triage`), the time a stage may take (`stage_timeout_minutes`). Beyond a limit it escalates to you, as a `needs-human` item. It does not retry without end.
+- **Parked and waiting stories.** A story parked longer than `max_parked_hours` (72), or one that has had `max_dispatches_per_story` (15) sessions, is escalated, never while a session of it runs; the escalation names the stories waiting for it. A story waiting on a person is mentioned again after `remind_after_hours` (48), once per wait. A story whose session is running is admitted first, so a returning story never runs beside it. Detail: [layer-4-conductor.md](layer-4-conductor.md).
+- **A dispatch is recorded before it is sent**, and the record is withdrawn if sending fails. So a dispatch can be duplicated, never lost.
 
 ### Actions budget
 
-GitHub measures the allowance in money: $18 a month on the Team plan. A standard Linux runner costs $0.006 per minute (about 3,000 minutes), a 1-core Linux runner costs $0.002 per minute, and self-hosted runners are not billed. **Each job's time is always rounded up to a whole minute**, so a job that runs for 5 seconds also counts as one minute. This rule shapes the design below.
+GitHub measures the allowance in money: the Team plan includes a monthly amount (`monthly_allowance_usd`, an estimate; check GitHub's billing pages). **Each job's time is rounded up to a whole minute**, so a job that runs for 5 seconds also counts as one minute. This rule shapes the design:
 
 - The test suite runs only as many times as necessary: once on head, plus, for a story branch, once on base with the test files overlaid. Both happen in the same job.
-- A draft PR runs only lint. The full gates are left until the implementation is complete: about three times per story rather than once per push.
+- A draft pull request runs only lint. The full gates are left until the implementation is complete.
 - An agent pushes only once, at the end of each stage.
-- Light jobs that do not run the PR's code (`spec-verify`, `risk-gate`, conductor, evidence, brief) can use a 1-core runner instead, set with the repo variable `LIGHT_RUNNER`.
-- The conductor's heartbeat on Actions is once every four hours. When you are at the computer, that scheduled run is the only one that starts on Actions.
+- Light jobs that do not run the pull request's code can use a cheaper runner, set with the repository variable `LIGHT_RUNNER`.
 
-| | First version | Now |
-|---|---|---|
-| Each full gate run | about 5T + 7 minutes | about 2T + 4 minutes, plus about 3 light jobs |
-| Full gate runs per story | about 8 | about 3 |
-| Per story (T=3) | about 215 minutes | about 55 minutes equivalent |
-| Fixed overhead per month | about 750 minutes | about 70 minutes equivalent, lower when the conductor runs locally |
-| Stories supportable per month (T=3 / T=10) | about 10 / 4 | about 50 / 30 |
-
-T is the number of minutes one run of the test suite takes. "Equivalent" means 1-core runner minutes converted by unit price. The figures assume that every job runs on a GitHub-hosted runner; none of them counts on overflow. **These are all estimates and have not yet been measured.** The spike in [new-project.md](new-project.md) asks you to record the actual numbers.
-
-**Overflow to a self-hosted runner is off by default.** This reverses an earlier decision in this design, which was to move the heavy jobs to the runner in the VM on your Mac when the allowance ran low. `overflow_runner` in `policy/conductor.toml` is now empty. `agentctl budget` still estimates the month's usage from the Actions job records (it runs in both the daily brief and the conductor's scheduled runs) and reports it, but it moves nothing unless a runner is configured.
-
-The reason: `ci` and `security` execute the PR's code. The Lima VM is long-lived, has passwordless sudo and holds an agent's logins. PR code running there could change the firewall, read those logins and persist into later jobs. Overflow needs a runner that is dedicated to these jobs, holds no credentials and is recreated for every job. This template does not provide one.
-
-The consequence: when the Actions allowance runs out, CI stops, and nothing merges until the next month begins or until you pay for more. If you do configure a suitable runner, usage reaching 85% of the allowance points the repo variable `CI_RUNNER` at it, and a new month changes it back. Only `ci` and `security` follow that variable. The jobs that judge always stay on GitHub-hosted runners: a machine that PR code has touched cannot be used to judge that same code. The threshold, the unit prices and the allowance are all in `policy/conductor.toml`.
+`agentctl budget` estimates the month's usage from the Actions job records and reports it in the daily brief. These are estimates and have not been measured against a bill. **Overflow to a self-hosted runner is off** (`overflow_runner = []`): `ci` and `security` execute the pull request's code, so such a runner would have to be dedicated, hold no credentials and be recreated for every job, and the kit does not provide one. When the allowance runs out, CI stops, and nothing merges until the next month begins or until you pay for more. The jobs that judge always stay on GitHub-hosted runners: a machine that pull request code has touched cannot be used to judge that same code.
 
 ### Where agents run
 
-| Location | How it is started | Does the laptop need to be open |
+| Location | How it is started | Does the Mac need to be on |
 |---|---|---|
-| Claude Code cloud session | The conductor calls a scheduled task's API trigger | No |
-| Codex cloud | The conductor leaves an `@codex` comment on the PR or issue | No |
-| Claude review | The `agent-review` workflow job | No |
-| Local Docker Sandbox, clone mode | The conductor running on your Mac starts it directly | Yes |
-| Self-hosted runner in the Lima VM (not part of the supported setup path) | The conductor starts the `agent-job` workflow, and the runner picks it up when it comes online | Yes |
+| Claude Code cloud session | The conductor calls a scheduled task's API trigger (`via = "http"`) | The conductor does, to dispatch and to handle the result |
+| Codex cloud | The conductor leaves an `@codex` comment on the pull request or issue (`via = "comment"`) | As above |
+| Claude review | The `agent-review` workflow, started by the conductor | As above |
+| Local Docker Sandbox, clone mode | The conductor starts it directly (`via = "sbx"`) | Yes, with the conductor running there |
 
-The first three are the main workforce. The local Docker Sandbox is extra capacity and the fallback. It needs the Mac to be on, with the conductor running there. Ollama stages run in it (`via = "sbx"`), not on the Lima runner. The last row is kept as a reference only: that runner has known gaps (section 3), and the setup guides do not cover it. A stage assigned to a local sandbox while the conductor is on GitHub Actions simply waits until the conductor runs on the Mac again. Which cloud path actually works has to be confirmed by the spike. For one that does not, change it to `via = "sbx"` in `policy/roles.toml`.
+Which cloud path actually works has to be confirmed on your accounts. For one that does not, change it to `via = "sbx"` in `[roles.harness.*]`.
 
-## 7. Your day to day
+## 9. Turning on auto-merge in stages
+
+A new project's tests are not yet good enough to serve as the basis for merging, so `auto_merge_tiers` is empty by default (**shadow mode**): every gate is computed and reported as usual, but you press merge, and the conductor only notifies you that "this one can be merged". An existing project adopts the conductor this way too.
+
+Observe for a while. Once you have confirmed that the gates' conclusions agree with your own judgement, set `auto_merge_tiers = ["T0"]`, then `["T0", "T1"]`. Each is a pull request that changes `agentdev.toml`, so a human approves it. T2 always needs human approval and can never be listed.
+
+The credibility of auto-merge is capped by the quality of the tests. That is the reason for doing it in stages. [layer-4-conductor.md](layer-4-conductor.md) says what to watch before each step.
+
+## 10. Your day to day
 
 You do four things:
 
 1. Add a line to the roadmap, or say one sentence to the PO.
-2. Approve or answer spec PRs.
-3. Approve sprint PRs.
+2. Approve or answer spec pull requests.
+3. Approve sprint pull requests.
 4. Push release tags.
 
 You look at two places:
 
-- **Director's brief**: one fixed issue, updated every day. It contains sprint progress, things waiting for your decision, items that are stuck, newly merged items, and the estimate of the month's Actions usage along with where the conductor is currently running. Every Monday it has an extra audit section: the number of merges per tier, the number of reverts, the number of escalations, and a few randomly drawn PRs that were merged without a human, for you to spot-check. The numbers come from GitHub, not from what agents say about themselves.
-- **GitHub notifications**: PRs that need your review and issues that mention you are your decision queue. An escalation mentions the humans; it does not assign the issue.
+- **Director's brief**: one fixed issue, updated every day. It contains sprint progress, things waiting for your decision, items that are stuck, newly merged items and the estimate of the month's Actions usage. Every Monday it has an extra audit section: the number of merges per tier, the number of reverts, the number of escalations, and a few randomly drawn pull requests that were merged without a human, for you to spot-check. The numbers come from GitHub, not from what agents say about themselves.
+- **GitHub notifications**: pull requests that need your review and issues that mention you are your decision queue. An escalation mentions the humans; it does not assign the issue.
 
-## 8. Turning on auto-merge in stages
+## 11. Verified and not yet verified
 
-A new project's tests are not yet good enough to serve as the basis for merging, so `auto_merge_tiers` is empty by default (shadow mode): every gate is computed and reported as usual, but you press merge, and the conductor only notifies you that "this one can be merged".
-
-Observe for a while. Once you have confirmed that the gates' conclusions agree with your own judgement, turn on `T0` first, then `T1`. T2 always needs human approval.
-
-The credibility of auto-merge is capped by the quality of the tests. That is the reason for doing it in stages.
-
-## 9. Verified and not yet verified
+**Nothing has run against real GitHub, Docker Sandboxes, the vendors' cloud services or a Mac.** This section is the single list for the whole kit; each layer's document says which of these its checklist settles.
 
 **Verified during development:**
 
-- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 140 unit tests in total.
-- Red-green was run end to end on a real git repo, split into two steps, collect and judge: an empty test was blocked, and passed after being changed into a real test. When the collect step was not run, the judgement was fail rather than pass.
+- The tools' logic has 174 unit tests, which pass: risk tiering, configuration, init, bilingual spec and document checks, traceability, red-green judgement, the conductor's scheduling logic (reconcile), the budget estimate, identity and token profiles, the command-blocking hook, and the installer.
+- Red-green was run end to end on a real git repository, split into collect and judge: an empty test was blocked, and passed after being changed into a real test. When the collect step was not run, the judgement was fail rather than pass.
 - The step of `spec-verify` that keeps only plain result files was run as written in the workflow, against an artifact that contained symbolic links and stray files.
-- The baseline step and the filter step of `ci.yml` were run as written against a fake `gh`: seven runs with missing and expired artifacts, a refused listing and a refused download.
-- The test flow of the spike was run in a scratch repository with the shipped runner: an honest story passes both judges, and vacuous tests, tests without ids and expected failures are rejected.
-- The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving a marker before the work is sent and withdrawing it when sending fails, marking a draft ready for review, a single failed action not affecting the others. It ignores forged markers (written by anyone other than the conductor or a listed human) and decoy pull requests (closed, into another base, or from another repository). While the lease is valid the Actions side does not take over, and it takes over when the lease expires; a local conductor stops when the lease names someone else. When usage reaches the threshold it rewrites `CI_RUNNER` only if an overflow runner is configured.
-- A hostile module in the working directory (`agentctl.py`, `json.py`, `tomllib.py`) cannot shadow the tooling when it is started through `bin/agentctl` or `python3 -I tools/run.py`.
-- `sandbox/sbx.sh` refuses to run with secret-looking files in the tree, from a tampered checkout, onto a sandbox that already exists, and with a bad story id, stage or harness name. The refusals were checked; the `sbx` commands behind them were not run. In this round the script was also run against a fake `sbx` for the network probe, the scan of untracked files for secret-looking names, re-attach, the limit on name length and the collision of two repository names. After the third review it was run against a fake `sbx` again for the outcomes of the probe, a secret under a non-ASCII path, the ownership check on re-attach and a job name that is already taken.
-- The workflows pass actionlint, the shell scripts pass shellcheck, and the command-blocking hook has tests.
+- The baseline step of `ci` was run against a fake `gh`: seven runs with missing and expired artifacts, a refused listing and a refused download.
+- The test flow was run in a scratch repository with the shipped runner: an honest story passes both judges, and vacuous tests, tests without ids and expected failures are rejected.
+- The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving a marker before the work is sent and withdrawing it when sending fails, marking a draft ready, a single failed action not affecting the others, and ignoring forged markers and decoy pull requests.
+- A hostile module in the working directory (`agentctl.py`, `json.py`, `tomllib.py`) cannot shadow the tools when they are started through the launcher or `python3 -I tools/run.py`.
+- `sandbox/sbx.sh` was run against a fake `sbx` for its refusals (secret-looking files in the tree, an existing sandbox name, a bad story id, stage or harness), the network probe's outcomes, the limit on name length and the collision of two repository names. The `sbx` commands behind them were not run.
+- The workflows pass actionlint and the shell scripts pass shellcheck.
 
-**Not yet verified, to be done on your accounts and machines (the spike in new-project.md and the two red-team checklists):**
+**Not yet verified:**
 
-- The conductor's behaviour against the real GitHub API, in particular the API for issue dependency links and the reading of check status.
-- The actual interface for triggering a Claude cloud scheduled task by API, and whether starting an arbitrary task with an `@codex` comment is feasible and what it requires of the commenter's identity.
-- What a cloud session connected to a personal admin account can do on GitHub (section E of [redteam-machine.md](redteam-machine.md)).
-- Minting an agent App token against the real API (`agentctl app-token`).
-- The current input parameters of `anthropics/claude-code-action`, in particular `github_token`, the `--allowedTools` argument that the review depends on, and that `--tools` restricts the tools available to the reviewer; the account name of the Codex review bot and its review format.
-- Docker Sandboxes on a real Mac: the `sbx` commands used by `sandbox/sbx.sh`, clone mode, whether the proxy injects the App token into `git push` over HTTPS (the documentation does not spell this out), the home directory path inside the sandbox, and headless runs of each harness.
-- Three `sbx` commands that the setup now depends on: `sbx settings set skills.defaultMode off`, `sbx policy init deny-all` and `sbx policy reset --force`. Also that the whole project directory, ignored files included, is what clone mode mounts.
-- The network probe inside a real sandbox: that `curl` is present there, what a request denied by the sbx proxy looks like from inside (no answer, or which status), and that `github.com` is reachable. What an interactive sandbox that is already attached keeps when the machine-wide policy changes. That sbx accepts the longest sandbox name the script produces.
-- Narrowing an App token to fewer permissions through the real API, in particular a push token with pull requests: read, and that such a token is refused when it tries to open or review a PR. A merge is stopped by the `main-merge` ruleset, not by the token. Per-sandbox network rules. Both follow the documentation and neither has been exercised.
-- Environments with deployment branch rules on a private repo on the Team plan: that a run from any ref other than the default branch is refused the secrets of the `conductor` environment.
-- The `main-merge` ruleset: that it layers on the `main` ruleset as described in section 4, and that `integration_id: 15368` in the required checks names GitHub Actions and accepts the `agent-review` status written by a workflow job.
-- The `pull_request_target` trigger for a closed PR, the chain from `notify` to the conductor through `workflow_run`, and `workflow_run` on the completion of `agent-review`.
-- The review decision GitHub reports for an approved spec or sprint PR, the Conductor App enabling auto-merge on it, and the merge that follows. Also `gh pr merge --match-head-commit` and `gh pr merge --disable-auto` run as the Conductor App.
-- Reading repository variables through the API with the Conductor App's token (`gh api repos/OWNER/REPO/actions/variables/NAME`): the conductor reads the kill switch, the lease and the quota this way, and a read that is refused would make every pass behave as paused.
-- The commit statuses `risk-tier/*` written by `risk-gate` showing up in `statusCheckRollup`, where the conductor reads the tier.
-- How `actions/download-artifact` behaves with a hostile archive, for example one that contains symbolic links.
-- The Lima configuration and egress rules under `sandbox/`. They are not part of the supported setup path.
-- Whether the sandbox and permission syntax in `.claude/settings.json` matches the current version.
-- The actual label of the 1-core runner; the permissions needed for `workflow_run` to trigger the conductor and for downloading artifacts across workflows; the Conductor App's permission to write repo variables.
-- How required checks that were skipped on a draft PR behave after it is marked ready for review: that fresh full runs of `ci`, `security` and `spec-verify` appear for the same commit before it becomes mergeable.
-- Auto-merge across a push: whether GitHub keeps the request when a new commit is pushed, and the conductor withdrawing it at its next pass.
-- The actual gap between the budget estimate and the GitHub bill; whether the runner labels returned by the Actions jobs API are enough to tell the three classes of runner apart.
-- The behaviour of the local conductor (`conductor here`) on a real repo, including minting the Conductor App's token from the key on the Mac.
-- The feature boundaries of the GitHub Team plan on private repos: rulesets and auto-merge are available, merge queue and required reviewers for environments are not. The latter is why releases use tag protection instead.
+*Layer 1, isolation (settled by the checklist in [layer-1-isolation.md](layer-1-isolation.md)).*
 
-## 10. Known limitations
+- Docker Sandboxes on a real Mac: the `sbx` commands the scripts use, clone mode, that the whole project directory, ignored files included, is what clone mode mounts, whether the proxy injects the App token into `git push` over HTTPS, the home directory path inside the sandbox, and headless runs of each harness.
+- Three `sbx` commands the setup depends on: `sbx settings set skills.defaultMode off`, `sbx policy init deny-all` and `sbx policy reset --force`. Per-sandbox network rules.
+- The network probe inside a real sandbox: that `curl` is present there, what a request denied by the sbx proxy looks like from inside, and that `github.com` is reachable. That sbx accepts the longest sandbox name the script produces.
+- Minting an agent App token against the real API (`agentctl app-token`), and narrowing it to fewer permissions: a push token with pull requests: read, refused when it tries to open or review a pull request.
+- What a cloud session connected to a personal admin account can do on GitHub.
+- Whether the sandbox and permission syntax in `.claude/settings.json` matches the current Claude Code version, and that harness deny rules generated by `agentctl harness-settings` take effect.
 
-- The two developers themselves are trusted. The design defends against agents going out of control and against prompt injection, not against insiders.
-- In clone mode the agent's work exists only inside the VM until it pushes. A stage that ends without pushing leaves nothing behind except its log.
-- In the Lima fallback, and in sbx's direct mode, the workspace is mounted read-write. The agent can then destroy the working tree and can plant a git hook that later runs on the Mac. That is why clone mode is the default.
-- Clone mode shows the agent the whole project directory, ignored files included. The check in `sandbox/sbx.sh` for secrets goes by file name. A secret under another name is not found, and every sandbox could read it.
-- The default-branch check in `sandbox/sbx.sh` and in `agentctl conductor here` guards against the accident of running host scripts from an agent's branch. It is part of those scripts, so it does not defend against a checkout that is already hostile.
-- Docker Sandboxes is at version 0.x. Its commands may change.
-- Per-stage privileges exist only on the Docker Sandboxes path. In the Lima fallback every stage shares one VM and one write token. In a cloud session every stage acts as the account you connected.
-- The review token can write to PRs. It cannot push or merge, but nothing in the token stops it from opening or editing a PR.
-- The Lima VM and its self-hosted runner are not part of the supported setup path. The runner has known gaps; see section 3.
-- The subscription login state inside the VM could in theory be stolen by malicious repo content. The egress allowlist reduces this risk but does not remove it.
-- In the Lima fallback, egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
-- Cloud sessions act as the personal account you connect. Until section E of [redteam-machine.md](redteam-machine.md) has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test. The account is also a listed human, so the conductor would believe a marker comment written from a cloud session.
+*Layer 2, GitHub protection (settled by [layer-2-github.md](layer-2-github.md)).*
+
+- The `main-merge` ruleset layering on the `main` ruleset as described in section 6, and `agentctl rulesets 2` and `3` creating the four rulesets on a real repository, and that `integration_id: 15368` names GitHub Actions and accepts the `agent-review` status written by a workflow job.
+- Required checks from reusable workflows being reported as "caller job / job" (`ci / ci` and the others), as the rulesets expect.
+- Environments with deployment branch rules on a private repository on the Team plan: that a run from any ref other than the default branch is refused the secrets of the `conductor` environment, and that a called reusable workflow can use them.
+- The feature boundaries of the Team plan on private repositories: rulesets and auto-merge are available; merge queue and required reviewers for environments are not. The latter is why releases use tag protection.
+
+*Layer 3, CI gates (settled by [layer-3-ci.md](layer-3-ci.md)).*
+
+- The reusable workflows on real GitHub: fetching the kit by SHA from codeload, `secrets: inherit` into a called job, the reviewer reading its prompt from the runner's temporary directory, and `agentctl pins` against real callers.
+- The current input parameters of `anthropics/claude-code-action` (`github_token`, the `--allowedTools` argument, that `--tools` restricts the reviewer's tools); the account name of a review bot and its review format for the `REVIEW_BOTS` bridge.
+- How `actions/download-artifact` behaves with a hostile archive.
+- The commit statuses `risk-tier/*` showing up in `statusCheckRollup`, where the conductor reads the tier.
+- How required checks that were skipped on a draft pull request behave after it is marked ready: that fresh full runs appear for the same commit before it becomes mergeable.
+- The actual gap between the budget estimate and the GitHub bill, and the actual label of a cheaper runner.
+
+*Layer 4, conductor (settled by [layer-4-conductor.md](layer-4-conductor.md)).*
+
+- The conductor against the real GitHub API, in particular issue dependency links and the reading of check status, and reading repository variables with the Conductor App's token (a refused read would make every pass behave as paused).
+- Minting the Conductor App's token from the key on the Mac.
+- The interface for triggering a Claude cloud scheduled task by API, and whether starting a task with an `@codex` comment is feasible and what it requires of the commenter's identity.
+- The review decision GitHub reports for an approved spec or sprint pull request, the Conductor App enabling auto-merge on it, and the merge that follows. `gh pr merge --match-head-commit` and `--disable-auto` run as the Conductor App. That GitHub keeps an auto-merge request across a push, and the conductor withdrawing it.
+- A full loop from one sentence to a merged story, which the spike in layer 4 is meant to prove.
+
+## 12. Known limitations
+
+**Trust and scope**
+
+- The people on the project are trusted. The design defends against agents going out of control and against prompt injection, not against insiders.
 - What you paste into the PO chat or an issue enters the vendor's context and is outside the isolation.
-- There is no hard guarantee that the two language versions of a story mean the same thing. If the Chinese you approved and the English the agents implement differ, only the review agent and you yourself can catch it.
-- Test results are produced by the PR's code and can be forged. See section 4.
-- Red-green shows that the story's tests do not pass on main. A test written to behave differently on main than on the branch can still satisfy it, because tests are PR code. Only the review's audit of each test case can catch that.
+- Docker Sandboxes is at version 0.x. Its commands may change.
+- The capacity for continuous operation is limited by subscription quota. When quota runs out, work slows down. It does not fail.
+- Cloud triggering depends on features that both vendors are still evolving. The fallback is a local sandbox, but it needs the Mac to be on with the conductor running.
+- While you are away, things waiting for your decision accumulate. This is the only pace in director mode that is set by you.
+
+**Layer 1, isolation**
+
+- In clone mode the agent's work exists only inside the VM until it pushes. A stage that ends without pushing leaves nothing behind except its log.
+- Clone mode shows the agent the whole project directory, ignored files included. The check for secrets goes by file name. A secret under another name is not found, and every sandbox could read it.
+- The subscription login state inside the VM could in theory be stolen by malicious repository content. The egress allowlist reduces this risk but does not remove it.
+- The network probe is a spot check of three hosts, made when a sandbox is created. It does not prove that the effective allowlist equals the project's lists, and it cannot tell an origin's own 403 or 5xx answer from a policy denial.
+- Per-stage privileges exist only on the sandbox path. In a cloud session every stage acts as the account you connected.
+- Cloud sessions act as the personal account you connect. Until the layer 1 checklist has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test. The account is also a listed human, so the conductor would believe a marker comment written from a cloud session.
+- The Conductor App's private key is on the Mac that runs the conductor. It is kept outside the repository, where no sandbox can see it, but it is on the host.
+
+**Layer 2, GitHub protection**
+
+- The review token can write to pull requests. It cannot push or merge, but nothing in the token stops it from opening or editing one.
+- The conductor's login is accepted as a marker author with and without its `[bot]` suffix. A person whose login equals the Conductor App's slug would therefore be believed as a marker author. That person would also have to be a collaborator to comment at all.
+- A named developer's secret is used for that developer's stories, but nothing checks that the value stored under `NAME_<LOGIN>` really is that person's credential.
+
+**Layer 3, CI gates**
+
+- A pull request that edits a caller workflow chooses which kit version judges it, because GitHub runs a pull request's own workflow files. Only the code-owner approval required by layer 2 stops it. A mitigation to evaluate is the ruleset rule "require workflows to pass", which runs a workflow from a fixed repository and ref (not verified on the Team plan).
+- The reviewer can be talked into a wrong verdict by the text it reviews. See "The strength of `agent-review`" in section 6.
+- Test results are produced by the pull request's code and can be forged. See section 6.
+- Red-green shows that the story's tests do not pass on main. A test written to behave differently on main than on the branch can still satisfy it. Only the fidelity audit can catch that.
+- There is no hard guarantee that the two language versions of a story mean the same thing. If the translation you approved and the English the agents implement differ, only the review agent and you yourself can catch it.
+- Which files count as a dependency change is a list in `[risk.t2] dependency_manifests`. A manifest or lock file of a stack that the list does not name is not T2 until the project adds it. The same goes for `high_risk` and the project's own layout.
 - For a review started by a comment or run in a local sandbox, staying on the named commit is an instruction in the prompt, not a check.
-- Which files count as a dependency change is a list in `policy/risk-tiers.toml`. A manifest or lock file of a stack that the list does not name is not T2 until the project adds it.
-- The network probe is a spot check of three hosts, made when a sandbox is created or re-attached. It does not prove that the effective allowlist equals the project's lists.
-- The reviewer can be talked into a wrong verdict by the text it reviews. See "The strength of `agent-review`" in section 4.
-- The lease is not a lock. Around a hand-over two conductors can overlap. Each re-reads the lease before every dispatch it sends, which narrows the overlap but does not close it. A dispatch can be duplicated, never lost.
-- When one developer's Mac holds the lease, other developers' cloud stages advance only on the four-hourly scheduled Actions run, or on a run started by hand. Their local-sandbox stages (`via = "sbx"`) do not advance at all until their own Mac is the conductor.
-- Pausing withdraws auto-merge only when a conductor next runs. Until then GitHub still merges a PR that has auto-merge on as soon as its checks turn green. For an immediate stop, also disable it by hand: `gh pr merge NUMBER --disable-auto`.
-- Withdrawing auto-merge needs a pass that can list the PRs and call GitHub. If GitHub's API is failing altogether, nothing is withdrawn, and the manual command is the only way.
-- GitHub keeps an auto-merge request across later pushes. The conductor withdraws it at its next pass when the PR no longer qualifies, but between the push and that pass the request is still armed. GitHub still requires all five required checks on the new commit, and `risk-gate` fails a T2 commit until a human approves. So what the window can let through is a commit of a tier above the enabled ones but below T2 (T1 while only T0 is enabled) that also passes `ci`, `spec-verify` and `agent-review` before the conductor runs.
-- The conductor's login is accepted as a marker author with and without its `[bot]` suffix. A person whose login equals the Conductor App's slug would therefore be believed as a marker author. That person would also have to be a collaborator on the repo to comment at all.
-- The local conductor needs the Conductor App's private key on the Mac. It is kept outside the repo, where no sandbox can see it, but it is on the host.
 - Actions usage is an estimate. It may differ from the bill, so the warning in the brief may come too early or too late.
 - Overflow is off. When the Actions allowance is exhausted, CI stops and nothing merges until the next month begins or until you pay for more.
+
+**Layer 4, conductor**
+
+- It runs on one Mac. A second conductor for the same project on another Mac is not supported, and nothing detects it. When the Mac sleeps, nothing advances.
+- Pausing withdraws auto-merge only when a conductor next runs. Until then GitHub still merges a pull request that has auto-merge on as soon as its checks turn green. For an immediate stop, also disable it by hand: `gh pr merge NUMBER --disable-auto`.
+- Withdrawing auto-merge needs a pass that can list the pull requests and call GitHub. If GitHub's API is failing altogether, nothing is withdrawn, and the manual command is the only way.
+- GitHub keeps an auto-merge request across later pushes. The conductor withdraws it at its next pass when the pull request no longer qualifies, but between the push and that pass the request is still armed. GitHub still requires all five required checks on the new commit, and `risk-gate` fails a T2 commit until a human approves. So what the window can let through is a commit of a tier above the enabled ones but below T2 (T1 while only T0 is enabled) that also passes `ci`, `spec-verify` and `agent-review` before the conductor runs.
 - `touches` is a prediction and will miss things. The cost is merge conflicts and rework, corrected afterwards by triage. It does not lead to wrong code being merged.
-- The capacity for continuous operation is limited by subscription quota. When quota runs out, work slows down. It does not fail.
-- Cloud triggering depends on features that both vendors are still evolving. The fallback is a local Docker Sandbox, but it needs the Mac to be powered on with the conductor running there.
-- While you are away, things waiting for your decision accumulate. This is the only pace in director mode that is set by you.
+- A dispatch can be duplicated, never lost.

@@ -13,10 +13,10 @@ translation = "zh-TW"
 required = [
   "README.md",
   "docs/guideline.md",
-  "docs/new-project.md",
-  "docs/new-machine.md",
-  "docs/operations.md",
   "docs/threat-model.md",
-  "docs/redteam-project.md",
-  "docs/redteam-machine.md",
+  "docs/adopting.md",
+  "docs/layer-1-isolation.md",
+  "docs/layer-2-github.md",
+  "docs/layer-3-ci.md",
+  "docs/layer-4-conductor.md",
 ]
