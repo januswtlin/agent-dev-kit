@@ -8,7 +8,7 @@ context. Aim for the shortest design that removes their guesswork.
 
 1. Read `AGENTS.md`, then the story's `story.md` and `spec.toml`.
 2. Read the code the story touches and the designs of the stories it depends on.
-3. Create the branch `story/NNN-slug` from main and write `docs/design/NNN-slug.md`:
+3. Create the branch `story/NNN-slug` from main and write `${design}/NNN-slug.md`:
    - **Approach**: how the behaviour will be delivered, in a few paragraphs.
    - **Changes**: modules and files to add or change; data model and API changes with their exact shapes.
    - **Test plan**: for each TC id, where the test will live, what it sets up, what it asserts. Note anything that needs a fixture or a fake.

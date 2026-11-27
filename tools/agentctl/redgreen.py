@@ -14,7 +14,8 @@ from pathlib import Path
 
 from .globs import matches
 from .specs import Spec
-from .trace import TC_IN_TEST_RE, TcResult, parse_junit
+from . import ids
+from .trace import TcResult, parse_junit
 
 
 def _git(args: list[str], cwd: str | Path) -> str:
@@ -33,7 +34,7 @@ def test_files_to_overlay(repo: Path, base: str, spec: Spec, test_paths: list[st
             text = (repo / path).read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        if any(m.group(1) == spec.id for m in TC_IN_TEST_RE.finditer(text + " " + path)):
+        if any(m.group(1) == spec.id for m in ids.TC_IN_TEST_RE.finditer(text + " " + path)):
             selected.append(path)
     return selected
 

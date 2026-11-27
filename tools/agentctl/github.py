@@ -6,7 +6,7 @@ no state between runs.
 
 Trust rules for what is read back:
   - marker comments count only when written by the conductor itself or by a
-    human listed in policy/roles.toml. An agent can comment on issues, so a
+    human listed in [roles] of agentdev.toml. An agent can comment on issues, so a
     marker from anyone else is ignored.
   - a story's pull request is the open (else the merged) one from this
     repository into the default branch. Closed, cross-repository or
@@ -32,13 +32,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import config, ids
 from .reconcile import PR, Action, Dispatch, State, Story
 from .specs import load_all
 
 MARKER_RE = re.compile(r"<!-- conductor (\{.*?\}) -->", re.DOTALL)
 NOTIFIED_RE = re.compile(r"<!-- conductor-notified ([\w:/.-]+) -->")
 BRANCH_PREFIXES = ("story/", "spec/", "sprint/", "chore/")
-STORY_BRANCH_RE = re.compile(r"^story/(\d{3})(?:-[A-Za-z0-9._-]*)?$")
 SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
 NAME_RE = re.compile(r"^[a-z][a-z-]{1,30}$")
 # The installed kit this module belongs to (tools/agentctl/github.py -> kit root).
@@ -81,11 +81,11 @@ def variable(name: str) -> str:
         raise Unreadable(f"cannot read the repository variable {name}: {(exc.stderr or '').strip()[-200:]}") from exc
 
 
-def active_sprint(repo_root: Path) -> tuple[str, dict]:
+def active_sprint(sprints_dir: Path) -> tuple[str, dict]:
     """The highest-numbered sprint file on the default branch is the active sprint."""
-    files = sorted(p for p in (repo_root / "docs/sprints").glob("[0-9][0-9][0-9].toml"))
+    files = sorted((p for p in sprints_dir.glob("*.toml") if p.stem.isdigit()), key=lambda p: int(p.stem))
     if not files:
-        raise SystemExit("no sprint file in docs/sprints/")
+        raise SystemExit(f"no sprint file in {sprints_dir}")
     with open(files[-1], "rb") as fh:
         return files[-1].stem, tomllib.load(fh)
 
@@ -165,7 +165,7 @@ def select_pr(prs: list[dict], story_id: str, default_branch: str, branch: str |
     branch counts: story/012-anything-else is not story 012's pull request.
     """
     mine = [p for p in prs
-            if (m := STORY_BRANCH_RE.match(p.get("headRefName", ""))) and m.group(1) == story_id
+            if (m := ids.STORY_BRANCH_RE.match(p.get("headRefName", ""))) and m.group(1) == story_id
             and (branch is None or p.get("headRefName") == branch)
             and p.get("baseRefName") == default_branch and not p.get("isCrossRepository")]
     for state in ("OPEN", "MERGED"):
@@ -223,10 +223,11 @@ def approved_decision_prs(prs: list[dict], default_branch: str) -> list[int]:
                   and p.get("reviewDecision") == "APPROVED" and not p.get("autoMergeRequest"))
 
 
-def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[State, dict]:
+def collect(repo_root: Path, cfg: dict, read_only: bool = False) -> tuple[State, dict]:
     """Build the State the planner needs, plus a context dict for the executor."""
-    sprint_id, sprint = active_sprint(repo_root)
-    specs = load_all(repo_root / "docs/specs")
+    roles = cfg["roles"]
+    sprint_id, sprint = active_sprint(config.path(cfg, repo_root, "sprints"))
+    specs = load_all(config.path(cfg, repo_root, "specs"))
     view = gh_json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
     repo = view["nameWithOwner"]
     default_branch = (view.get("defaultBranchRef") or {}).get("name") or "main"
@@ -263,7 +264,7 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
     po_markers = [m for m in read_markers(sprint_bodies) if m.get("stage") == "product-owner"]
     last_po = float(po_markers[-1]["at"]) if po_markers else None
 
-    roadmap = repo_root / "docs/product/roadmap.md"
+    roadmap = config.path(cfg, repo_root, "roadmap")
     roadmap_text = re.sub(r"<!--.*?-->", "", roadmap.read_text(encoding="utf-8"), flags=re.DOTALL) if roadmap.exists() else ""
     unchecked = len(re.findall(r"^- \[ \] \S", roadmap_text, re.MULTILINE))
     open_spec_prs = sum(1 for p in prs if p["state"] == "OPEN" and p["headRefName"].startswith("spec/"))
@@ -276,11 +277,11 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
     for sid in sprint.get("stories", []):
         sid = str(sid)
         # Story ids end up in branch names, sandbox names and log paths.
-        if not re.fullmatch(r"\d{3}", sid):
-            raise SystemExit(f"sprint {sprint_id}: '{sid}' is not a story id (three digits)")
+        if not ids.is_story(sid):
+            raise SystemExit(f"sprint {sprint_id}: '{sid}' is not a story id ({ids.DIGITS} digits)")
         spec = specs.get(sid)
         title = f"Story {sid}: {spec.title if spec else '(spec missing)'}"
-        issue = ensure_issue(f"story:{sid}", title, f"Runtime state for story {sid}. Spec: docs/specs/{sid}-*/", read_only)
+        issue = ensure_issue(f"story:{sid}", title, f"Runtime state for story {sid}. Spec: {cfg['paths']['specs']}/{sid}-*/", read_only)
         issues[sid] = issue
         if issue["number"]:
             issue_to_story[issue["number"]] = sid
@@ -368,7 +369,7 @@ def collect(repo_root: Path, roles: dict, read_only: bool = False) -> tuple[Stat
         unopened_branches=unopened_branches(branches, prs, default_branch, story_branches),
         approved_prs=approved_decision_prs(prs, default_branch),
     )
-    context = {"repo": repo, "default_branch": default_branch, "sprint": sprint_id,
+    context = {"repo": repo, "default_branch": default_branch, "sprint": sprint_id, "config": cfg,
                "sprint_issue": sprint_issue["number"],
                "issues": {sid: issue["number"] for sid, issue in issues.items()}, "specs": specs,
                "prs": {sid: s.pr.number for sid, s in stories.items() if s.pr and not s.pr.merged},
@@ -382,17 +383,21 @@ PROMPT_FILE = {"fix": "impl", "resolve-conflict": "impl", "fix-main": "impl"}
 
 
 def _prompt(action: Action, context: dict) -> str:
+    from . import prompts
+
+    cfg = context["config"]
     spec = context["specs"].get(action.story)
-    lines = [f"Follow prompts/{PROMPT_FILE.get(action.stage, action.stage)}.md exactly. Read AGENTS.md first."]
+    lines = [prompts.render(PROMPT_FILE.get(action.stage, action.stage), cfg), "", "---", "",
+             "Follow the instructions above exactly. Read AGENTS.md first."]
     if action.stage in PROMPT_FILE:
-        lines.append(f"You are dispatched as `{action.stage}`; see the matching section at the end of that file.")
+        lines.append(f"You are dispatched as `{action.stage}`; see the matching section at the end of the instructions.")
     if spec:
-        lines.append(f"Story: {action.story}. Spec: docs/specs/{spec.path.name}/. Branch: story/{action.story}-{spec.slug}.")
+        lines.append(f"Story: {action.story}. Spec: {cfg['paths']['specs']}/{spec.path.name}/. Branch: story/{action.story}-{spec.slug}.")
         lines.append(f"Story issue: #{context['issues'][action.story]}.")
     else:
         lines.append(f"Sprint: {context['sprint']}. Sprint issue: #{context['sprint_issue']}.")
     if action.stage == "product-owner":
-        lines.append("Mode: async. Take the first unchecked line of docs/product/roadmap.md.")
+        lines.append(f"Mode: async. Take the first unchecked line of {cfg['paths']['roadmap']}.")
     if action.stage == "fix-main":
         lines.append("The default branch is failing its checks. Find the cause, fix it on a branch named chore/fix-main and push.")
     sha = context.get("shas", {}).get(action.story, "")
@@ -472,7 +477,7 @@ def preflight(action: Action, context: dict, roles: dict) -> None:
 
 
 def _send(action: Action, context: dict, roles: dict) -> None:
-    """Hand the work to a harness. `via` is configured per harness in policy/roles.toml."""
+    """Hand the work to a harness. `via` is configured per harness in [roles.harness]."""
     harness = roles.get("harness", {}).get(action.harness, {})
     developer = context.get("assignees", {}).get(action.story, "")
     via = harness.get("via", "")
@@ -564,7 +569,7 @@ def _open_pr(branch: str, context: dict) -> None:
     if not SAFE_BRANCH_RE.match(branch):
         raise SystemExit(f"refusing to open a pull request for branch {branch!r}")
     repo, base = context["repo"], context["default_branch"]
-    story = STORY_BRANCH_RE.match(branch)
+    story = ids.STORY_BRANCH_RE.match(branch)
     if story:
         spec = context["specs"].get(story.group(1))
         title = f"Story {story.group(1)}: {spec.title}" if spec else f"Story {story.group(1)}"

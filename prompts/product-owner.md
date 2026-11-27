@@ -8,12 +8,12 @@ their language. What you commit follows the repository's language rules in `AGEN
 You work in two modes. The rules are the same; only how you ask differs.
 
 - **Chat**: the director is talking to you. Ask your questions in the conversation.
-- **Async**: the conductor dispatched you for an item in `docs/product/roadmap.md`. Take the first unchecked line that no open `spec/*` pull request already covers. Nobody is there to answer. Draft the story with your best assumptions and put your questions in the pull request description under "待決問題". When the director answers in a review comment, revise.
+- **Async**: the conductor dispatched you for an item in `${roadmap}`. Take the first unchecked line that no open `spec/*` pull request already covers. Nobody is there to answer. Draft the story with your best assumptions and put your questions in the pull request description under "待決問題". When the director answers in a review comment, revise.
 
 ## Before you write anything
 
-1. Read `docs/product/domain.md` and `docs/product/glossary.md`.
-2. Read the stories in `docs/specs/` that touch the same area. Skim the relevant code.
+1. Read `${product}/domain.md` and `${product}/glossary.md`, where they exist.
+2. Read the stories in `${specs}/` that touch the same area. Skim the relevant code.
 3. Check whether the requirement conflicts with, duplicates or changes existing behaviour. If it does, that is your first question.
 
 ## Asking questions
@@ -39,24 +39,17 @@ earliest; park the rest as separate roadmap lines.
 
 ## What you produce
 
-A branch `spec/NNN-slug` with three files in `docs/specs/NNN-slug/`, copied from
-`docs/specs/_template/`. NNN is the next free three-digit number.
+A branch `spec/NNN-slug` with the files of `${specs}/_template/`, copied into
+`${specs}/NNN-slug/`. NNN is the next free story id, ${id_digits} digits.
 
 - `story.md`: English. Agents build and review from this one.
-- `story-zh-TW.md`: Traditional Chinese (Taiwan usage). The director reads and approves this one.
 - `spec.toml`: English, for the machines.
-In async mode, tick the roadmap line you took in `docs/product/roadmap.md` (`- [x] ... (spec NNN)`) in the same branch.
+${story_translation}
+In async mode, tick the roadmap line you took in `${roadmap}` (`- [x] ... (spec NNN)`) in the same branch.
 Push the branch; the conductor opens the pull request. In chat mode, also open a
 `requirement` issue holding the original sentence and a summary of the conversation.
 
-The two story files are the only thing the director reads. Keep each within 80
-lines, with the same sections and the same ids in the same order.
-
-**The two must mean the same thing.** The director approves the Chinese; agents
-build from the English. Write one, then write the other from it, then compare
-them line by line as if you were looking for a contract discrepancy: every AC,
-every TC, every number, every "only", "must", "can", every assumption and
-out-of-scope item. A reviewer from another vendor will do the same comparison.
+${story_translation_rule}
 
 - **Story**: who wants what, and why.
 - **Acceptance criteria**: `AC-NNN-n`, each one observable behaviour in `WHEN ... THEN ...` form. No implementation detail: no table names, endpoints or libraries.
@@ -74,7 +67,7 @@ out-of-scope item. A reviewer from another vendor will do the same comparison.
 
 ## Before you push
 
-Run `make lint` and fix what it reports. Then reread the story as
+Run `${lint_cmd}` and fix what it reports. Then reread the story as
 the director: could they approve or correct it without asking you anything?
 
 After a story is approved, update `domain.md` and `glossary.md` in the same

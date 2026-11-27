@@ -5,14 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
-import tomllib
 from pathlib import Path
 
-from . import apptoken, budget, docs, doctor, local, profiles, redgreen, risk, specs, trace
+from . import apptoken, budget, config, docs, doctor, ids, local, owners, profiles, redgreen, risk, specs, trace
 
 
 def _root() -> Path:
@@ -21,22 +19,24 @@ def _root() -> Path:
 
 
 def _trusted_root() -> Path:
-    """Where policy files are read from.
+    """Where agentdev.toml is read from.
 
     In CI this points at a checkout of the base branch, so a pull request cannot
-    loosen the policy that judges it. Locally it is the repository itself.
+    loosen the configuration that judges it. Locally it is the repository itself.
     """
     return Path(os.environ.get("AGENTCTL_TRUSTED_ROOT") or _root())
 
 
-def _toml(path: Path) -> dict:
-    with open(path, "rb") as fh:
-        return tomllib.load(fh)
+def _config() -> dict:
+    return config.load(_trusted_root())
+
+
+def _specs(cfg: dict, root: Path) -> dict:
+    return specs.load_all(config.path(cfg, root, "specs"))
 
 
 def _story_from_branch(branch: str | None) -> str | None:
-    m = re.match(r"(?:refs/heads/)?story/(\d{3})(?:-|$)", branch or "")
-    return m.group(1) if m else None
+    return ids.story_from_branch(branch)
 
 
 def _current_branch() -> str:
@@ -54,11 +54,10 @@ def _finish(name: str, problems: list[str]) -> int:
 
 
 def cmd_risk(args) -> int:
-    root = _root()
-    policy = risk.load_policy(_trusted_root() / "policy/risk-tiers.toml")
+    root, cfg = _root(), _config()
     story = _story_from_branch(args.branch or _current_branch())
-    has_story = bool(story and story in specs.load_all(root / "docs/specs"))
-    result = risk.assess(risk.changes_from_git(args.base, args.head), policy, has_story)
+    has_story = bool(story and story in _specs(cfg, root))
+    result = risk.assess(risk.changes_from_git(args.base, args.head), cfg["risk"], has_story)
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     return 0
 
@@ -69,16 +68,20 @@ def cmd_spec_lint(args) -> int:
         out = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", f"{args.base}...HEAD"],
                              check=True, capture_output=True, text=True).stdout
         changed = {line for line in out.split("\0") if line}
-    return _finish("spec lint", specs.lint(_root() / "docs/specs", changed))
+    cfg = _config()
+    return _finish("spec lint", specs.lint(config.path(cfg, _root(), "specs"), changed,
+                                           translation=cfg["stories"].get("translation", ""),
+                                           max_lines=cfg["stories"].get("max_lines", specs.STORY_MAX_LINES)))
 
 
 def cmd_docs_lint(args) -> int:
-    return _finish("docs lint", docs.lint(_root()))
+    cfg = _config()
+    return _finish("docs lint", docs.lint(_root(), cfg["docs"].get("translation", ""), cfg["docs"].get("required", [])))
 
 
 def cmd_trace(args) -> int:
-    root = _root()
-    all_specs = specs.load_all(root / "docs/specs")
+    root, cfg = _root(), _config()
+    all_specs = _specs(cfg, root)
     story = args.story or _story_from_branch(args.branch or _current_branch())
     head = trace.parse_junit(args.junit)
     base = None
@@ -91,15 +94,15 @@ def cmd_trace(args) -> int:
             for path in sorted(_glob.glob(pattern, recursive=True)):
                 by_run.setdefault(str(Path(path).parent), []).append(path)
         base = trace.passed_in_any([trace.parse_junit(paths) for paths in by_run.values()])
-    retired = specs.load_retired(root / "docs/specs")
+    retired = specs.load_retired(config.path(cfg, root, "specs"))
     return _finish("traceability", trace.check(all_specs, head, story, base, retired))
 
 
 def cmd_redgreen(args) -> int:
-    root = _root()
-    project = _toml(_trusted_root() / "policy/project.toml")
+    root, cfg = _root(), _config()
+    project = cfg["tests"]
     story = args.story or _story_from_branch(args.branch or _current_branch())
-    all_specs = specs.load_all(root / "docs/specs")
+    all_specs = _specs(cfg, root)
     if not story or story not in all_specs:
         print("red-green: no story on this branch, nothing to check")
         return 0
@@ -116,9 +119,11 @@ def cmd_redgreen_collect(args) -> int:
     root = _root()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    project = _toml(root / "policy/project.toml")
+    # This job runs pull request code anyway, so the configuration may come from it.
+    cfg = config.load(root)
+    project = cfg["tests"]
     story = args.story or _story_from_branch(args.branch or _current_branch())
-    all_specs = specs.load_all(root / "docs/specs")
+    all_specs = _specs(cfg, root)
     if not story or story not in all_specs:
         print("red-green: no story on this branch, nothing to collect")
         return 0
@@ -136,7 +141,7 @@ def cmd_redgreen_collect(args) -> int:
 def cmd_redgreen_judge(args) -> int:
     """Judge red-green from JUnit files only. Executes no project code."""
     story = args.story or _story_from_branch(args.branch or _current_branch())
-    all_specs = specs.load_all(_root() / "docs/specs")
+    all_specs = _specs(_config(), _root())
     if not story or story not in all_specs:
         print("red-green: no story on this branch, nothing to check")
         return 0
@@ -161,8 +166,7 @@ def cmd_redgreen_judge(args) -> int:
 
 
 def cmd_evidence(args) -> int:
-    root = _root()
-    all_specs = specs.load_all(root / "docs/specs")
+    all_specs = _specs(_config(), _root())
     if args.story not in all_specs:
         print(f"unknown story {args.story}", file=sys.stderr)
         return 1
@@ -173,14 +177,13 @@ def cmd_evidence(args) -> int:
 def _reconcile_once(root: Path, dry_run: bool) -> int:
     from . import github, reconcile
 
-    policy = _toml(root / "policy/conductor.toml")
-    roles = _toml(root / "policy/roles.toml")
+    cfg = config.load(root)
     # A dry run reads and prints. It creates nothing, not even the tracking issues.
-    state, context = github.collect(root, roles, read_only=dry_run)
-    actions = reconcile.plan(state, policy, roles)
+    state, context = github.collect(root, cfg, read_only=dry_run)
+    actions = reconcile.plan(state, cfg["conductor"], cfg["roles"])
     if not actions:
         print("nothing to do")
-    return github.execute(actions, context, roles, dry_run=dry_run)
+    return github.execute(actions, context, cfg["roles"], dry_run=dry_run)
 
 
 def _conductor_identity(repo: Path) -> tuple[str, str, str]:
@@ -221,7 +224,7 @@ def cmd_conductor(args) -> int:
     repo = _root()
     app_id, key, full_name = _conductor_identity(repo)
     _as_conductor(app_id, key, full_name)
-    # Local sandboxes clone this repository. Specs, sprint and policy are read from a
+    # Local sandboxes clone this repository. Specs, sprint and configuration are read from a
     # fresh checkout of the default branch, never from the working tree.
     os.environ["AGENT_PROJECT_DIR"] = str(repo)
 
@@ -295,7 +298,7 @@ def cmd_budget(args) -> int:
 def _budget(root: Path, dry_run: bool) -> int:
     from . import github
 
-    cfg = budget.settings(_toml(root / "policy/conductor.toml"))
+    cfg = budget.settings(config.load(root)["conductor"])
     repo = github.gh_json("repo", "view", "--json", "nameWithOwner")["nameWithOwner"]
     try:
         usage = json.loads(github.gh("variable", "get", "ACTIONS_USAGE", check=False) or "null")
@@ -326,7 +329,7 @@ def cmd_status(args) -> int:
     from . import github
 
     root = _root()
-    state, context = github.collect(root, _toml(root / "policy/roles.toml"), read_only=True)
+    state, context = github.collect(root, config.load(root), read_only=True)
     summary = _status_summary(state, context)
     if args.markdown:
         print(_status_markdown(summary))
@@ -378,6 +381,23 @@ def _status_markdown(summary: dict) -> str:
             id=s["id"], state=s["state"], done=", ".join(s["stages_done"]) or "-",
             flight=s["last_dispatch"] or "-", fix=s["fix_rounds"], pr=f"#{s['pr']}" if s["pr"] else "-"))
     return "\n".join(lines) + "\n"
+
+
+def cmd_codeowners(args) -> int:
+    """Print .github/CODEOWNERS for this project, or check the committed one."""
+    text = owners.codeowners(_config())
+    if not args.check:
+        print(text, end="")
+        return 0
+    path = _root() / ".github/CODEOWNERS"
+    current = path.read_text(encoding="utf-8") if path.exists() else ""
+    return _finish("codeowners", [] if current == text else
+                   [".github/CODEOWNERS differs from agentdev.toml; run `agentctl codeowners > .github/CODEOWNERS`"])
+
+
+def cmd_harness_settings(args) -> int:
+    print(owners.harness_settings(_config(), args.kind), end="")
+    return 0
 
 
 def cmd_doctor(args) -> int:
@@ -451,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("redgreen", help="check that the story's tests fail on base and pass on head")
     p.add_argument("--base", default="origin/main")
-    p.add_argument("--junit", nargs="+", help="JUnit XML from head (defaults to policy/project.toml junit_glob)")
+    p.add_argument("--junit", nargs="+", help="JUnit XML from head (defaults to [tests] junit_glob)")
     p.add_argument("--story")
     p.add_argument("--branch")
     p.set_defaults(func=cmd_redgreen)
@@ -464,6 +484,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="deterministic sprint summary used by the director's brief")
     p.add_argument("--markdown", action="store_true")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("codeowners", help="print .github/CODEOWNERS generated from agentdev.toml, or --check it")
+    p.add_argument("--check", action="store_true")
+    p.set_defaults(func=cmd_codeowners)
+
+    p = sub.add_parser("harness-settings", help="print the Claude Code deny rules for a stage's sandbox")
+    p.add_argument("kind", choices=["story", "spec"])
+    p.set_defaults(func=cmd_harness_settings)
 
     p = sub.add_parser("doctor", help="check host hygiene, or the sandbox boundary with --inside")
     p.add_argument("--inside", action="store_true")

@@ -7,7 +7,7 @@ why. You can. You start with no memory; read before deciding.
 ## Read
 
 - The story issue: every comment, especially the reports left by earlier stages.
-- The spec in `docs/specs/NNN-slug/`.
+- The spec in `${specs}/NNN-slug/`.
 - The branch `story/NNN-slug`: its diff against main, its commit history, its failing checks and their logs.
 - The other stories in the sprint, if a dependency is suspected.
 

@@ -2,9 +2,10 @@ import unittest
 from pathlib import Path
 
 from agentctl.globs import matches
-from agentctl.risk import Change, assess, load_policy
+from agentctl import config
+from agentctl.risk import Change, assess
 
-POLICY = load_policy(Path(__file__).resolve().parents[2] / "policy/risk-tiers.toml")
+POLICY = config.load(Path(__file__).resolve().parent / "no-such-project")["risk"]
 
 
 def tier(paths, has_story=True, lines=10):
@@ -43,8 +44,7 @@ class RiskTests(unittest.TestCase):
         self.assertEqual(tier(["db/migrations/0002_add_proof.sql"]).tier, "T2")
 
     def test_guardrails_are_t2(self):
-        for path in [".github/workflows/ci.yml", "policy/risk-tiers.toml", "AGENTS.md", "tools/agentctl/risk.py",
-                     ".claude/settings.json", "prompts/review.md"]:
+        for path in [".github/workflows/ci.yml", "agentdev.toml", "AGENTS.md", "CLAUDE.md", ".claude/settings.json"]:
             self.assertEqual(tier([path]).tier, "T2", path)
 
     def test_specs_are_human_gated(self):
@@ -73,12 +73,6 @@ class RiskTests(unittest.TestCase):
     def test_scanner_configuration_is_a_guardrail(self):
         for path in [".gitleaks.toml", ".gitleaksignore", ".semgrepignore", ".gitattributes"]:
             self.assertEqual(tier([path]).tier, "T2", path)
-
-    def test_codeowners_covers_every_guardrail_and_dependency_pattern_family(self):
-        owners = (Path(__file__).resolve().parents[2] / ".github/CODEOWNERS").read_text()
-        for needle in ["/.github/", "/policy/", "/tools/", "/sandbox/", "/prompts/", "/.claude/", "/AGENTS.md",
-                       "/.gitleaks.toml", "package-lock.json", "uv.lock", "go.sum", "/docs/specs/"]:
-            self.assertIn(needle, owners, needle)
 
     def test_one_risky_file_taints_the_whole_change(self):
         self.assertEqual(tier(["docs/a.md", "src/auth/session.py"]).tier, "T2")

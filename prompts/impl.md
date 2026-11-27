@@ -5,10 +5,10 @@ another agent from the approved spec. They are the definition of done.
 
 ## Steps
 
-1. Read `AGENTS.md`, the story's `story.md` and `spec.toml`, `docs/design/NNN-slug.md`, and the tests on the branch `story/NNN-slug`.
+1. Read `AGENTS.md`, the story's `story.md` and `spec.toml`, `${design}/NNN-slug.md`, and the tests on the branch `story/NNN-slug`.
 2. Implement the behaviour following the design. If the design is wrong or incomplete, fix the approach, and update the design document in the same commit so it stays true.
 3. Stay inside the story. Do not add features, refactor unrelated code or "improve" things the story does not mention.
-4. Run `make lint` and `make test` until both pass. Commit in small steps; push once, when the stage is complete.
+4. Run `${lint_cmd}` and `${test_cmd}` until both pass. Commit in small steps; push once, when the stage is complete.
 
 ## About the tests
 
@@ -36,12 +36,12 @@ design changes and why, anything you could not do.
 
 The prompt gives the reason: failing checks or review findings. Read the check
 logs or the reviewer's findings on the pull request, fix exactly those, run
-`make lint` and `make test`, push. The push is what asks for a fresh review: a
+`${lint_cmd}` and `${test_cmd}`, push. The push is what asks for a fresh review: a
 review verdict belongs to one commit. Comment on the story issue with what you
 changed per finding. If you disagree with a finding, say why in the comment; do not ignore it.
 
 ## When dispatched as `resolve-conflict`
 
 Rebase or merge main into the branch, resolve conflicts preserving both
-stories' behaviour, run `make test`, push. If the conflict shows that the two
+stories' behaviour, run `${test_cmd}`, push. If the conflict shows that the two
 stories want incompatible things, stop and comment; do not pick a winner.

@@ -67,7 +67,7 @@ def load_env_file(path: Path) -> dict[str, str]:
 def fresh_main_checkout(repo: Path, branch: str = "main") -> Path:
     """A detached worktree of origin/<branch>, refreshed on every call.
 
-    The conductor must read the approved sprint, specs and policy from the default
+    The conductor must read the approved sprint, specs and configuration from the default
     branch, never from whatever happens to be checked out in the working directory.
     """
     common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],

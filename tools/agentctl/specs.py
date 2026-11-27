@@ -1,4 +1,4 @@
-"""Story specs: docs/specs/NNN-slug/{story.md, spec.toml}.
+"""Story specs: <specs dir>/NNN-slug/{story.md, spec.toml}, NNN being [stories] id_digits long.
 
 spec.toml is the machine-readable half of what the product owner approves:
 acceptance criteria, test case descriptions and scheduling metadata.
@@ -11,10 +11,9 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-AC_RE = re.compile(r"\bAC-(\d{3})-(\d+)\b")
-TC_RE = re.compile(r"\bTC-(\d{3})-(\d{2})\b")
+from . import ids
+
 STORY_MAX_LINES = 80
-STORY_ZH = "story-zh-TW.md"
 
 
 @dataclass
@@ -81,7 +80,7 @@ def load_all(specs_dir: str | Path) -> dict[str, Spec]:
 
 
 def load_retired(specs_dir: str | Path) -> set[str]:
-    """Test case ids a human agreed to drop: docs/specs/retired.toml, `retired = ["TC-012-03"]`."""
+    """Test case ids a human agreed to drop: <specs dir>/retired.toml, `retired = ["TC-012-03"]`."""
     path = Path(specs_dir) / "retired.toml"
     if not path.exists():
         return set()
@@ -120,7 +119,7 @@ def find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
 
 def _ids_in_order(text: str) -> list[str]:
     seen: list[str] = []
-    for m in re.finditer(r"\b(?:AC-\d{3}-\d+|TC-\d{3}-\d{2})\b", text):
+    for m in ids.ANY_ID_RE.finditer(text):
         if m.group(0) not in seen:
             seen.append(m.group(0))
     return seen
@@ -130,13 +129,16 @@ def _heading_levels(text: str) -> list[int]:
     return [len(m.group(1)) for m in re.finditer(r"^(#{1,6})\s", text, re.MULTILINE)]
 
 
-def lint(specs_dir: str | Path, changed: set[str] | None = None) -> list[str]:
+def lint(specs_dir: str | Path, changed: set[str] | None = None, translation: str = "zh-TW",
+         max_lines: int = STORY_MAX_LINES) -> list[str]:
     """Consistency checks run on every spec PR. Returns a list of problems.
 
     `changed` is the set of file paths (relative to the repository root, forward
     slashes) touched by the pull request. When given, a story edited in one
-    language only is reported.
+    language only is reported. `translation` names the language of the version
+    the director approves (story-<translation>.md); empty means there is none.
     """
+    story_zh = f"story-{translation}.md" if translation else ""
     problems: list[str] = []
     specs_dir = Path(specs_dir)
     specs: dict[str, Spec] = {}
@@ -155,8 +157,8 @@ def lint(specs_dir: str | Path, changed: set[str] | None = None) -> list[str]:
             problems.append(f"{where}: duplicate id (also in {specs[spec.id].path})")
         specs[spec.id] = spec
 
-        if not re.fullmatch(r"\d{3}", spec.id):
-            problems.append(f"{where}: id must be three digits")
+        if not ids.is_story(spec.id):
+            problems.append(f"{where}: id must be {ids.DIGITS} digits")
         if not folder.name.startswith(f"{spec.id}-"):
             problems.append(f"{where}: folder {folder.name} must start with '{spec.id}-'")
         if not spec.touches:
@@ -169,13 +171,13 @@ def lint(specs_dir: str | Path, changed: set[str] | None = None) -> list[str]:
         if not spec.tc:
             problems.append(f"{where}: no test cases")
         for ac_id in spec.ac:
-            m = AC_RE.fullmatch(ac_id)
+            m = ids.AC_RE.fullmatch(ac_id)
             if not m or m.group(1) != spec.id:
                 problems.append(f"{where}: bad AC id {ac_id} (expected AC-{spec.id}-N)")
         seen_tc: set[str] = set()
         covered: set[str] = set()
         for tc in spec.tc:
-            m = TC_RE.fullmatch(tc.id)
+            m = ids.TC_RE.fullmatch(tc.id)
             if not m or m.group(1) != spec.id:
                 problems.append(f"{where}: bad TC id {tc.id} (expected TC-{spec.id}-NN)")
             if tc.id in seen_tc:
@@ -198,35 +200,35 @@ def lint(specs_dir: str | Path, changed: set[str] | None = None) -> list[str]:
             problems.append(f"{where}: story.md is missing")
         else:
             text = story.read_text(encoding="utf-8")
-            mentioned = {m.group(0) for m in AC_RE.finditer(text)} | {m.group(0) for m in TC_RE.finditer(text)}
+            mentioned = {m.group(0) for m in ids.AC_RE.finditer(text)} | {m.group(0) for m in ids.TC_RE.finditer(text)}
             declared = set(spec.ac) | seen_tc
             for missing in sorted(declared - mentioned):
                 problems.append(f"{where}: {missing} is in spec.toml but not in story.md")
             for extra in sorted(mentioned - declared):
                 problems.append(f"{where}: {extra} is in story.md but not in spec.toml")
             lines = text.count("\n") + 1
-            if lines > STORY_MAX_LINES:
-                problems.append(f"{where}: story.md has {lines} lines; keep it within {STORY_MAX_LINES} so it can be reviewed on one screen")
+            if lines > max_lines:
+                problems.append(f"{where}: story.md has {lines} lines; keep it within {max_lines} so it can be reviewed on one screen")
 
-            # The director reads and approves the Traditional Chinese rendering; agents
-            # build from the English one. They must at least have the same shape.
-            story_zh = folder / STORY_ZH
-            if not story_zh.exists():
-                problems.append(f"{where}: {STORY_ZH} is missing")
-            else:
-                zh = story_zh.read_text(encoding="utf-8")
+            # The director reads and approves the translated rendering; agents build
+            # from the English one. They must at least have the same shape.
+            zh_path = folder / story_zh if story_zh else None
+            if zh_path and not zh_path.exists():
+                problems.append(f"{where}: {story_zh} is missing")
+            elif zh_path:
+                zh = zh_path.read_text(encoding="utf-8")
                 if _ids_in_order(zh) != _ids_in_order(text):
-                    problems.append(f"{where}: story.md and {STORY_ZH} do not list the same AC/TC ids in the same order")
+                    problems.append(f"{where}: story.md and {story_zh} do not list the same AC/TC ids in the same order")
                 if _heading_levels(zh) != _heading_levels(text):
-                    problems.append(f"{where}: story.md and {STORY_ZH} have different sections")
+                    problems.append(f"{where}: story.md and {story_zh} have different sections")
                 zh_lines = zh.count("\n") + 1
-                if zh_lines > STORY_MAX_LINES:
-                    problems.append(f"{where}: {STORY_ZH} has {zh_lines} lines; keep it within {STORY_MAX_LINES}")
+                if zh_lines > max_lines:
+                    problems.append(f"{where}: {story_zh} has {zh_lines} lines; keep it within {max_lines}")
                 if changed is not None:
-                    touched = {name for name in ("story.md", STORY_ZH)
+                    touched = {name for name in ("story.md", story_zh)
                                if any(path.endswith(f"/{folder.name}/{name}") for path in changed)}
                     if len(touched) == 1:
-                        other = STORY_ZH if "story.md" in touched else "story.md"
+                        other = story_zh if "story.md" in touched else "story.md"
                         problems.append(f"{where}: {touched.pop()} changed but {other} did not; update both together")
 
     for spec in specs.values():

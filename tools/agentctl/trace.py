@@ -9,13 +9,12 @@ are all accepted.
 from __future__ import annotations
 
 import glob
-import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
+from . import ids
 from .specs import Spec
 
-TC_IN_TEST_RE = re.compile(r"(?<![A-Za-z0-9])TC[-_ ]?(\d{3})[-_ ]?(\d{2})(?!\d)", re.IGNORECASE)
 
 
 @dataclass
@@ -52,12 +51,12 @@ def parse_junit(patterns: list[str]) -> dict[str, TcResult]:
             continue
         for case in root.iter("testcase"):
             label = " ".join(filter(None, [case.get("classname"), case.get("name"), case.get("file")]))
-            ids = {f"TC-{m.group(1)}-{m.group(2)}" for m in TC_IN_TEST_RE.finditer(label)}
-            if not ids:
+            ids_ = {f"TC-{m.group(1)}-{m.group(2)}" for m in ids.TC_IN_TEST_RE.finditer(label)}
+            if not ids_:
                 continue
             name = "::".join(filter(None, [case.get("classname"), case.get("name")]))
             children = {child.tag for child in case}
-            for tc_id in ids:
+            for tc_id in ids_:
                 result = results.setdefault(tc_id, TcResult())
                 if children & {"failure", "error"}:
                     result.failed.append(name)

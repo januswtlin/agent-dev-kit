@@ -1,0 +1,22 @@
+# The kit's own checks (`make lint` in this repository): its documents in both
+# languages and the example story under templates/. Projects have their own file.
+
+[paths]
+specs = "templates/project/docs/specs"
+sprints = "templates/project/docs/sprints"
+roadmap = "templates/project/docs/product/roadmap.md"
+product = "templates/project/docs/product"
+design = "templates/project/docs/design"
+
+[docs]
+translation = "zh-TW"
+required = [
+  "README.md",
+  "docs/guideline.md",
+  "docs/new-project.md",
+  "docs/new-machine.md",
+  "docs/operations.md",
+  "docs/threat-model.md",
+  "docs/redteam-project.md",
+  "docs/redteam-machine.md",
+]

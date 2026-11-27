@@ -5,6 +5,7 @@ from pathlib import Path
 from agentctl import redgreen, specs, trace
 
 ROOT = Path(__file__).resolve().parents[2]
+EXAMPLE_SPECS = ROOT / "templates/project/docs/specs"
 
 
 def junit(cases: list[tuple[str, str]]) -> str:
@@ -41,7 +42,7 @@ class ParseTests(unittest.TestCase):
 
 class TraceTests(unittest.TestCase):
     def setUp(self):
-        self.specs = specs.load_all(ROOT / "docs/specs")
+        self.specs = specs.load_all(EXAMPLE_SPECS)
 
     def test_all_passing_is_ok(self):
         self.assertEqual(trace.check(self.specs, results(ALL_PASS), story="000"), [])
@@ -93,7 +94,7 @@ class TraceTests(unittest.TestCase):
 
 class RedGreenTests(unittest.TestCase):
     def setUp(self):
-        self.spec = specs.load_all(ROOT / "docs/specs")["000"]
+        self.spec = specs.load_all(EXAMPLE_SPECS)["000"]
 
     def test_red_on_base_green_on_head_passes(self):
         base = results([(name, "fail") for name, _ in ALL_PASS])
@@ -160,7 +161,7 @@ class RedGreenTests(unittest.TestCase):
 
 class SpecLintTests(unittest.TestCase):
     def test_example_spec_is_clean(self):
-        self.assertEqual(specs.lint(ROOT / "docs/specs"), [])
+        self.assertEqual(specs.lint(EXAMPLE_SPECS), [])
 
     def write(self, root: Path, sid: str, toml: str, story: str):
         folder = root / f"{sid}-x"
@@ -213,6 +214,12 @@ level = "unit"
         self.assertIn("story-zh-TW.md changed but story.md did not", self.bilingual(en, zh, {"docs/specs/001-x/story-zh-TW.md"}))
         self.assertEqual(self.bilingual(en, zh, {"docs/specs/001-x/story.md", "docs/specs/001-x/story-zh-TW.md"}), "")
         self.assertEqual(self.bilingual(en, zh, {"src/app.py"}), "")
+
+    def test_without_a_translation_only_the_english_story_is_needed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(Path(tmp), "001", self.GOOD, "# S\nAC-001-1 TC-001-01\n")
+            self.assertEqual(specs.lint(tmp, translation=""), [])
+            self.assertIn("story-zh-TW.md is missing", "\n".join(specs.lint(tmp)))
 
     def test_reports_dependency_cycle_and_unknown_dependency(self):
         def toml(sid, dep):

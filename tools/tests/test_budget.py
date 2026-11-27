@@ -96,10 +96,13 @@ class LocalTests(unittest.TestCase):
             self.assertEqual(local.load_env_file(Path(tmp) / "none"), {})
 
 
+REQUIRED = ["README.md", "docs/guideline.md", "docs/operations.md"]
+
+
 class DocsLintTests(unittest.TestCase):
     def make(self, files: dict[str, str]) -> str:
         tmp = tempfile.mkdtemp()
-        for rel in docs.REQUIRED:
+        for rel in REQUIRED:
             files.setdefault(rel, "# T\n")
             files.setdefault(rel[:-3] + "-zh-TW.md", "# T\n")
         for rel, text in files.items():
@@ -111,7 +114,11 @@ class DocsLintTests(unittest.TestCase):
         return tmp
 
     def test_clean(self):
-        self.assertEqual(docs.lint(self.make({})), [])
+        self.assertEqual(docs.lint(self.make({}), "zh-TW", REQUIRED), [])
+
+    def test_without_a_translation_only_presence_is_checked(self):
+        root = self.make({"docs/operations-zh-TW.md": None, "docs/guideline.md": None})
+        self.assertEqual(docs.lint(root, "", REQUIRED), ["docs/guideline.md: missing"])
 
     def test_missing_translation_orphan_translation_and_structure_drift(self):
         root = self.make({
@@ -120,7 +127,7 @@ class DocsLintTests(unittest.TestCase):
             "docs/guideline.md": "# A\n## B\n```\n# not a heading\n```\n## C\n",
             "docs/guideline-zh-TW.md": "# A\n## B\n",
         })
-        problems = "\n".join(docs.lint(root))
+        problems = "\n".join(docs.lint(root, "zh-TW", REQUIRED))
         self.assertIn("docs/operations.md: no operations-zh-TW.md", problems)
         self.assertIn("docs/extra-zh-TW.md: no English source", problems)
         self.assertIn("different heading structure (3 vs 2 headings)", problems)

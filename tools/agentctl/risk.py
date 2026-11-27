@@ -1,4 +1,4 @@
-"""Risk tiering of a change set, driven by policy/risk-tiers.toml.
+"""Risk tiering of a change set, driven by [risk] in agentdev.toml.
 
 T0: documentation-only. Merges when checks are green.
 T1: ordinary code change tied to an approved story. Merges when checks and agent review pass.

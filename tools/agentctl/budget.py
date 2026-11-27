@@ -29,7 +29,7 @@ DEFAULTS = {
     "monthly_allowance_usd": 18.0,
     "overflow_at": 0.85,
     "hosted_runner": "ubuntu-latest",
-    "overflow_runner": [],  # off: see policy/conductor.toml before turning it on
+    "overflow_runner": [],  # off: see [conductor.actions] in the kit defaults before turning it on
     "light_labels": ["ubuntu-slim"],
     "price_per_minute": {"standard": 0.006, "light": 0.002, "arm": 0.005},
 }

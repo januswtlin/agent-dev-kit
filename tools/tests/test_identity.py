@@ -4,11 +4,10 @@ import os
 import shutil
 import subprocess
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
-from agentctl import apptoken, github
+from agentctl import apptoken, config, github
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -74,26 +73,6 @@ class AppTokenTests(unittest.TestCase):
         self.assertFalse(apptoken._fresh(cached, "acme/app", "2", now=1000))
 
 
-class TemplateNeutralityTests(unittest.TestCase):
-    def test_init_fills_in_the_people(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            for rel in ("scripts/init.sh", ".github/CODEOWNERS", "policy/roles.toml"):
-                (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(ROOT / rel, Path(tmp) / rel)
-            run = subprocess.run([str(Path(tmp) / "scripts/init.sh"), "alice", "bob-b"], capture_output=True, text=True)
-            self.assertEqual(run.returncode, 0, run.stderr)
-            roles = tomllib.loads((Path(tmp) / "policy/roles.toml").read_text())
-            self.assertEqual(roles["directors"], ["alice"])
-            self.assertEqual(roles["humans"], ["alice", "bob-b"])
-            owners = (Path(tmp) / ".github/CODEOWNERS").read_text()
-            self.assertIn("@alice", owners)
-            self.assertNotIn("DIRECTOR_LOGIN", owners)
-            again = subprocess.run([str(Path(tmp) / "scripts/init.sh"), "carol"], capture_output=True, text=True)
-            self.assertNotEqual(again.returncode, 0)
-            bad = subprocess.run([str(ROOT / "scripts/init.sh"), "not a login"], capture_output=True, text=True)
-            self.assertNotEqual(bad.returncode, 0)
-
-
 if __name__ == "__main__":
     unittest.main()
 
@@ -137,7 +116,8 @@ class Recorder:
 
 class DispatchTests(unittest.TestCase):
     CONTEXT = {"issues": {"001": 2}, "sprint_issue": 1, "sprint": "001", "specs": {}, "prs": {"001": 7},
-               "shas": {"001": "abc"}, "assignees": {"001": "alice"}, "default_branch": "main", "repo": "o/r"}
+               "shas": {"001": "abc"}, "assignees": {"001": "alice"}, "default_branch": "main", "repo": "o/r",
+               "config": config.load(ROOT / "no-such-project")}
 
     def setUp(self):
         self.saved_env, self.saved_gh = dict(os.environ), github.gh
@@ -328,11 +308,14 @@ class StageProfileTests(unittest.TestCase):
         from agentctl import profiles
         self.assertEqual({s for s in profiles.STAGE_PROFILES if profiles.for_stage(s)["settings"] == "spec"},
                          {"product-owner", "planner"})
-        story = json.loads((ROOT / "sandbox/story-agent.claude-settings.json").read_text())["permissions"]["deny"]
-        spec = json.loads((ROOT / "sandbox/spec-agent.claude-settings.json").read_text())["permissions"]["deny"]
+        from agentctl import config, owners
+        cfg = config.load(ROOT / "no-such-project")
+        story = json.loads(owners.harness_settings(cfg, "story"))["permissions"]["deny"]
+        spec = json.loads(owners.harness_settings(cfg, "spec"))["permissions"]["deny"]
         self.assertIn("Edit(docs/specs/**)", story)
         self.assertNotIn("Edit(docs/specs/**)", spec)
-        self.assertIn("Edit(policy/**)", spec)  # guardrails stay off limits for both
+        self.assertIn("Edit(agentdev.toml)", spec)  # guardrails stay off limits for both
+        self.assertIn("Edit(.github/**)", story)
 
     def test_an_unknown_stage_gets_the_least(self):
         from agentctl import profiles
