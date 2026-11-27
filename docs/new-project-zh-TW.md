@@ -8,9 +8,22 @@
 
 標示 **待驗證** 的地方還沒在真實的帳號或機器上跑過。做的時候請對照當下的官方文件，並把結果回寫到這份文件。
 
+請依章節順序做。每一節都依賴前面的章節。
+
 ## 1. 需要什麼
 
 - GitHub organization，方案要能在 private repo 上強制 ruleset（Team 以上），每個人一個座位。Agent 與 conductor 都是 GitHub App，不佔座位。
+- 執行這些步驟的電腦上要有 Python 3.11 以上。工具使用 `tomllib`，並以 `python3 -I` 啟動。檢查：
+
+```bash
+python3 --version
+```
+
+- 較新版的 `gh`，並以 repo admin 身分登入。Conductor 與 script 會用到 `gh variable get` 與 `gh variable set`，舊版沒有這兩個指令。目前不知道確切的最低版本。下面這行若印出用法說明，表示你的 `gh` 夠新；若回報未知指令，請升級：
+
+```bash
+gh variable get --help
+```
 
 ## 2. 建立專案 repo
 
@@ -18,6 +31,12 @@
 
 ```bash
 mkdir -p ~/dev && cd ~/dev && gh repo clone OWNER/REPO
+```
+
+進入 clone 下來的目錄。之後的每個指令都在這裡執行：
+
+```bash
+cd REPO
 ```
 
 填入專案裡有誰。第一個帳號是 director，負責核准產品決定；列出的每個帳號都可以核准 T2 變更。只有一個人也可以：
@@ -34,24 +53,48 @@ scripts/init.sh DIRECTOR_LOGIN OTHER_LOGIN
 make lint && make test
 ```
 
+`scripts/init.sh` 只修改本機的檔案（`.github/CODEOWNERS` 與 `policy/roles.toml`）。把它們 commit 並 push 到 `main`：
+
+```bash
+git add .github/CODEOWNERS policy/roles.toml && git commit -m "Fill in who is on the project" && git push origin main
+```
+
+這是唯一一次直接 push 到 `main`，而且必須現在做，在第 5 節的 ruleset 存在之前。Ruleset 套用之後，`main` 只能經由 pull request 變更，而動到這兩個檔案的 pull request 需要 code owner 的核准，也需要 `main` 上的 `policy/roles.toml` 所列的人類核准。只要 `main` 上還留著佔位字串 `DIRECTOR_LOGIN`，就沒有人是 code owner，也沒有人是那樣的人類，所以沒有人能核准修正它的 pull request。
+
 ## 3. 專案的身分
 
 專案本身有兩種身分：conductor，以及人。每個人的 agent 身分屬於他自己，在 [new-machine-zh-TW.md](new-machine-zh-TW.md) 設定。
 
 ### Conductor GitHub App
 
-在 organization 的 Settings > Developer settings > GitHub Apps 建立一個 App：
+Conductor 會開啟並合併 pull request、在 issue 上留言與加 label、觸發 workflow、讀取 check，以及讀寫 repository variable。在 organization 的 Settings > Developer settings > GitHub Apps 建立一個 App：
 
 - Repository permissions：Contents: Read and write；Pull requests: Read and write；Issues: Read and write；Actions: Read and write；Variables: Read and write；Checks: Read；Commit statuses: Read；Metadata: Read。
 - 不訂閱任何 webhook，取消勾選 Active。
-- 建立後產生一把 private key，並把 App 安裝到這個 repo。
+- 建立後產生一把 private key，並把 App 安裝到這個 repo。記下 App 的數字 ID。下載的 key 檔要放在專案目錄之外：sandbox 讀得到該目錄裡的每個檔案，包含被 git 忽略的檔案。
 
-在 repo 的 Settings > Secrets and variables > Actions：
+接著建立存放 pipeline secret 的 GitHub environment。請在設定 `CONDUCTOR_APP_ID` 之前做：這個 variable 是空的時候，conductor 的 job 會被跳過，而它不應該在 environment 受到限制之前執行。
 
-| 類型 | 名稱 | 值 |
-|---|---|---|
-| Variable | `CONDUCTOR_APP_ID` | App 的 ID |
-| Secret | `CONDUCTOR_APP_PRIVATE_KEY` | private key 的完整內容 |
+1. 在 repo 的 Settings > Environments，建立一個名稱正好是 `conductor` 的 environment。
+2. 在 Deployment branches and tags 選 Selected branches and tags，加入一條只允許 default branch（`main`）的規則。
+3. 在這個 environment 裡新增 environment secret `CONDUCTOR_APP_PRIVATE_KEY`，值是 private key 的完整內容。也可以用指令：
+
+```bash
+gh secret set CONDUCTOR_APP_PRIVATE_KEY --env conductor < PATH_TO_PRIVATE_KEY.pem
+```
+
+為什麼用 environment 而不是 repository secret：持有憑證的 job（`conductor.yml` 的 `reconcile`、`brief.yml` 的 `brief`、`agent-review.yml` 的 `claude`）都宣告了 `environment: conductor`。從其他任何 ref 啟動的執行，包含手動 dispatch 某個 branch，GitHub 本身就會拒絕給它 secret。Repository secret 沒有這種規則。**待驗證**：Team 方案的 private repo 是否能使用帶有 deployment branch 規則的 environment、這些設定的確切名稱，以及若 workflow 先提到這個 environment，GitHub 不會自動建立一個沒有 branch 規則的 environment。
+
+最後，在 repo 的 Settings > Secrets and variables > Actions > Variables 新增 repository variable，或執行：
+
+```bash
+gh variable set CONDUCTOR_APP_ID --body APP_ID
+```
+
+| 類型 | 名稱 | 位置 | 值 |
+|---|---|---|---|
+| Environment secret | `CONDUCTOR_APP_PRIVATE_KEY` | Environment `conductor` | private key 的完整內容 |
+| Repository variable | `CONDUCTOR_APP_ID` | Settings > Secrets and variables > Actions > Variables | App 的數字 ID |
 
 ### 人類
 
@@ -59,27 +102,37 @@ make lint && make test
 
 ## 4. Secrets 與 variables
 
-在 repo 的 Settings > Secrets and variables > Actions。這些屬於專案。屬於個人訂閱的 secret 在 [new-machine-zh-TW.md](new-machine-zh-TW.md) 第 3 節。
+兩個不同的地方：
+
+- **Secret** 是 `conductor` 這個 environment 的 environment secret（Settings > Environments > conductor）。上面的 `CONDUCTOR_APP_PRIVATE_KEY` 是如此，每個屬於個人訂閱的 secret 也是如此（`DISPATCH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_TRIGGER_URL`、`CLAUDE_TRIGGER_TOKEN`，各自可以加上 `_LOGIN` 後綴）。後者的說明在 [new-machine-zh-TW.md](new-machine-zh-TW.md) 第 3 節。不要把其中任何一個建成 repository secret：job 讀的是 environment，而 repository secret 連從 branch 執行的 workflow 也讀得到。
+- **Variable** 是 repository variable（Settings > Secrets and variables > Actions > Variables）。裡面不放任何機密。專案的 variable 如下：
 
 | 類型 | 名稱 | 來源 | 何時需要 |
 |---|---|---|---|
 | Variable | `REVIEW_BOTS` | JSON 陣列，Codex review bot 的帳號，例如 `["chatgpt-codex-connector[bot]"]` **待驗證** | Codex review |
-| Variable | `CONDUCTOR_PAUSED` | `true` 或留空 | Kill switch |
+| Variable | `CONDUCTOR_PAUSED` | 要暫停時設為 `true`；否則設為 `false` 或不設 | Kill switch |
 | Variable | `CONDUCTOR_QUOTA` | JSON，例如 `{"alice/codex": 1795800000}`，值為額度恢復的 epoch 秒 | 手動標記某個 harness 額度用盡 |
 | Variable | `OLLAMA_MODEL` | 例如 `devstral` | 使用 Ollama 時 |
 | Variable | `LIGHT_RUNNER` | 1-core runner 的 label **待驗證**；不設則用 `ubuntu-latest` | 想降低輕量 job 的費用時 |
-| Variable | `CI_RUNNER` | 由 `agentctl budget` 自動維護，不需手動設定 | 額度 overflow |
+| Variable | `CI_RUNNER` | 由 `agentctl budget` 自動維護，不需手動設定。Overflow 預設關閉，所以它會一直是 GitHub-hosted runner | `ci` 與 `security` 在哪裡執行 |
 | Variable | `CONDUCTOR_HOME`、`CONDUCTOR_LEASE`、`ACTIONS_USAGE` | 由 `agentctl` 自動維護 | Conductor 的位置與用量估算 |
+| Variable | `CONDUCTOR_BOT` | 通常不設。不論在 Actions 上或在本機，conductor 都會從 App 得出自己的帳號（`APP-SLUG[bot]`）。放進這個 variable 的帳號會被額外信任為 conductor marker 留言的作者 | 只有在以另一個帳號寫下的 marker 仍須被採信時才需要。列在這裡的帳號可以左右 conductor，所以其他情況請不要設 |
 
 ## 5. Rulesets 與 repo 設定
 
-Template 的內容必須先在 `main` 上（required checks 對應的 workflow 要存在），再套用 ruleset。以 admin 身分執行：
+Template 的內容與第 2 節的 commit 必須先在 `main` 上（required checks 對應的 workflow 要存在，code owner 也要是真實的帳號），再套用 ruleset。以 admin 身分執行，並帶上 Conductor App 的數字 ID：
 
 ```bash
-scripts/apply-rulesets.sh
+CONDUCTOR_APP_ID=APP_ID scripts/apply-rulesets.sh
 ```
 
-在 Settings > General > Pull Requests：開啟 Allow auto-merge、只允許 squash merging、開啟 Automatically delete head branches。
+沒有 `CONDUCTOR_APP_ID` 時 script 會拒絕執行。它會建立或更新三個 ruleset：
+
+- `main`：不可刪除、不可 force-push、只能經由 pull request 變更（需要 code owner review 的路徑要有該 review），以及五個 required check。任何人都沒有 bypass。
+- `main-merge`：只有 repo admin 與 Conductor App 可以更新 default branch。Agent 的 token 可以 push branch，而這個 ruleset 讓它即使在 pull request 的每個 check 都是綠的時候也無法合併。Admin 與 Conductor App 仍然必須滿足 `main` 的全部要求。
+- `release-tags`：只有 repo admin 可以建立、移動或刪除 `v*` tag。
+
+在 Settings > General > Pull Requests：開啟 Allow auto-merge、只允許 squash merging、開啟 Automatically delete head branches。Allow auto-merge 不是選用的：conductor 開啟 spec、sprint 與 chore 的 pull request 時會替它啟用 auto-merge，而這是你核准之後唯一會合併它們的機制。
 
 確認：
 
@@ -87,7 +140,7 @@ scripts/apply-rulesets.sh
 gh api repos/OWNER/REPO/rulesets --jq '.[].name'
 ```
 
-應列出 `main` 與 `release-tags`。**待驗證**：`.github/rulesets/*.json` 的欄位是否被目前的 API 接受；若 API 回報未知欄位，依錯誤訊息調整後回寫。
+應列出 `main`、`main-merge` 與 `release-tags`。**待驗證**：`.github/rulesets/*.json` 的欄位是否被目前的 API 接受；`main` 與 `main-merge` 是否如上所述疊加（`main-merge` 的 bypass 不會削弱 `main`）；App 的 ID 是否就是 Integration bypass 該用的 `actor_id`；以及 `main.json` 裡的 `integration_id: 15368` 是否就是產生 required check 的 GitHub Actions app。若 API 回報未知欄位，依錯誤訊息調整後回寫。
 
 ## 6. 設定第一個人
 
@@ -95,42 +148,97 @@ gh api repos/OWNER/REPO/rulesets --jq '.[].name'
 
 ## 7. Spike：先證明一圈跑得完
 
-在投入真正的 story 之前，用一個玩具 story 驗證整條路徑。目標是在不下任何手動指令的情況下，看到這個順序發生：
+在投入真正的 story 之前，用一個玩具 story 驗證整條路徑。Spike 就是 sprint 001。目標是除了這裡列出的指令之外，不下任何手動指令，就看到這個順序發生。
 
-1. 建立 `docs/specs/001-hello/`（一個 AC、兩個 TC 的小功能）與 `docs/sprints/001.toml`（`stories = ["001"]`），經 PR 合併。
-2. Conductor 執行，派發 `design`。先用 dry run 看它打算做什麼：
+沒有人手動開 pull request。Agent（在這裡是你）push 一個 branch。Workflow `notify` 會在這次 push 時執行；它不持有任何 secret，也不做任何事。Conductor 在它完成時做出反應，以 Conductor App 的身分開啟 pull request。你自己開的 pull request，你無法核准。
+
+1. 在名為 `sprint/001` 的 branch 上建立 spike 的 spec 與 sprint：
+
+```bash
+git switch -c sprint/001
+```
+
+```bash
+cp -R docs/specs/_template docs/specs/001-hello
+```
+
+```bash
+cp docs/sprints/_template.toml docs/sprints/001.toml
+```
+
+   填好三個 spec 檔（一個 AC、兩個 TC 的小功能）與 sprint 檔（`stories = ["001"]`；`assignee` 設為第 6 節那個人的帳號，若他的 secret 是用不帶後綴的名稱存的，就保留 `default`）。然後檢查、commit 並 push：
+
+```bash
+make lint
+```
+
+```bash
+git add docs/specs/001-hello docs/sprints/001.toml && git commit -m "Add the spike story and sprint 001" && git push -u origin sprint/001
+```
+
+2. 等 conductor 為 `sprint/001` 開啟 pull request。它一開就是可審狀態，並已啟用 auto-merge。先不要核准。
+3. 暫停 conductor。否則 sprint 檔一合併就會立刻開始一次真正的執行：
+
+```bash
+gh variable set CONDUCTOR_PAUSED --body true
+```
+
+4. 核准這個 pull request。你不用按 merge：check 全綠之後它會自己合併。合併會觸發 conductor 執行；暫停期間每一次都只印出 `halt`。
+5. 要求一次 dry run。暫停期間它同樣只印出 `halt (kill switch is on)`，因為暫停中的 conductor 不會計算計畫。這可以確認 kill switch 有效：
 
 ```bash
 gh workflow run conductor.yml -f dry_run=true
 ```
 
-3. Agent 推 `story/001-hello`，`open-pr` 以 draft 開 PR。Draft 只跑 lint 與 `risk-gate`。
-4. 依序出現 `done:design`、`done:tests`、`done:impl`。`done:impl` 之後 conductor 把 PR 轉為可審，完整的 gate 第一次執行。
-5. `agent-review` 被派發並寫入 status。
-6. 五個 check 全綠。Shadow mode 下 conductor 通知你可以合併；你按 merge。
-7. `evidence` 把對照表貼到 story issue。
+6. 要看到計畫，就解除暫停並立刻要求一次 dry run。解除暫停本身不會啟動任何東西：下一次真正的執行要等下一個事件，或排程的執行（每四小時一次）。如果中間剛好有事件進來，真正的執行會先發生；在這裡沒有害處。
+
+```bash
+gh variable set CONDUCTOR_PAUSED --body false
+```
+
+```bash
+gh workflow run conductor.yml -f dry_run=true
+```
+
+   閱讀執行紀錄。它應該列出為 story 001 派發 `design`，沒有其他意外的動作。Dry run 不會建立任何東西，連追蹤用的 issue 也不會。
+7. 啟動真正的執行：
+
+```bash
+gh workflow run conductor.yml
+```
+
+8. Conductor 派發 `design`。Agent push `story/001-hello`，`notify` 執行，conductor 以 draft 開啟 pull request。Draft 只跑 lint 與 `risk-gate`。
+9. 依序出現 `done:design`、`done:tests`、`done:impl`。`done:impl` 之後 conductor 把 pull request 轉為可審，完整的 gate 第一次執行。
+10. `agent-review` 被派發，並把 status 寫在 head commit 上。沒有完成的 review 會被發布為 failure，絕不會留成通過。
+11. 五個 check 全綠。Shadow mode 下 conductor 通知你這個 pull request 可以合併；你按 merge。
+12. `evidence` 把對照表貼到 story issue。
 
 Claude 與 Codex 各擔任一次實作。每一步若卡住，記下卡在哪裡與錯誤訊息：
 
 | 卡住的地方 | 處理 |
 |---|---|
 | Conductor 讀狀態時出錯 | 修 `tools/agentctl/github.py` 的 `collect`。它還沒對真實 API 跑過 |
-| 某個 harness 無法由雲端觸發 | 在 `policy/roles.toml` 把它改成 `via = "workflow"`，改用 self-hosted runner |
+| `reconcile` job 在 App token 那一步失敗，或被拒絕使用 environment | 檢查 environment `conductor` 是否存在、它的 branch 規則是否允許 `main`，以及 `CONDUCTOR_APP_PRIVATE_KEY` 是這個 environment 的 secret，而不是 repository secret |
+| Branch 已 push，卻沒有出現 pull request | 檢查 `notify` 是否因這次 push 而執行，之後是否接著有一次 `conductor` 執行。`CONDUCTOR_PAUSED` 為 `true` 時 conductor 不會開任何東西，一天也不會開超過 `max_prs_per_day` 個 story pull request。Branch 名稱必須以 `story/`、`spec/`、`sprint/` 或 `chore/` 開頭 |
+| Pull request 開了但 check 沒跑 | 它必須由 Conductor App 開啟，不是用 `GITHUB_TOKEN`。檢查 `reconcile` job 是否用了 App token。另外，check 只會為目標是 `main` 的 pull request 執行 |
+| 已核准的 spec 或 sprint pull request 沒有合併 | 檢查 Allow auto-merge 是否開啟（第 5 節）、這個 pull request 是否已啟用 auto-merge，以及五個 check 在你核准的那個 commit 上是否全綠。核准之後再有 push，核准就失效 |
+| 某個 harness 無法由雲端觸發 | 在 `policy/roles.toml` 把它改成 `via = "sbx"`。它的 stage 會改在開發者 Mac 上的 Docker Sandbox 執行，並等到那台 Mac 上有 `bin/agentctl conductor here` 在跑。這是在 `chore/` branch 上的 T2 變更 |
 | Agent 沒有加 `done:*` label | 檢查 agent 身分是否有 Issues 寫入權；必要時在 prompt 中加強 |
-| `agent-review` 一直 pending | 檢查 `CLAUDE_CODE_OAUTH_TOKEN`、`REVIEW_BOTS`，以及 action 的輸入參數 |
-| PR 開了但 checks 沒跑 | PR 必須由 Conductor App 開啟，不是 `GITHUB_TOKEN` |
+| `agent-review` 一直 pending | 如果是 Claude review，看 `agent-review` workflow 的執行：review 沒有完成時 `publish` job 會設成 failure，所以 pending 表示這次執行根本沒有開始，或無法解析 pull request。檢查 `CLAUDE_CODE_OAUTH_TOKEN` 是 `conductor` environment 的 secret，並檢查 action 的輸入參數。如果是 Codex review，檢查 `REVIEW_BOTS` |
 
 同時記下這些數字並回填 guideline 第 6 節的表：測試套件跑一次的分鐘數、一個 story 從開始到合併觸發了幾次完整的 gate、Actions 的 Usage 頁面顯示這個 story 用掉多少。
 
 ## 8. Red-team
 
-執行 [redteam-project-zh-TW.md](redteam-project-zh-TW.md) 的全部項目。有任何一項成功就先修。
+執行 [redteam-project-zh-TW.md](redteam-project-zh-TW.md) 的全部項目。有任何一項沒有得到預期結果，就先修。
 
 ## 9. 第一個真正的 sprint
 
-1. 在 `docs/product/roadmap.md` 加幾行需求，經 PR 合併；或用 PO chat 逐一討論。
-2. 核准 PO 開的 spec PR。
-3. Planner 會在 sprint 接近完成時起草下一個 sprint。第一個 sprint 需要手動請它起草：開一個 Claude Code session，要它依 `prompts/planner.md` 起草 sprint 001。
-4. 核准 sprint PR。Conductor 從這裡接手。
+Spike 用掉了 sprint 001，所以第一個真正的 sprint 是 sprint 002。
 
-自動合併一開始是關閉的。何時以及如何開啟，見 [operations-zh-TW.md](operations-zh-TW.md) 第 2 節。
+1. 在 `docs/product/roadmap.md` 加幾行需求，經 PR 合併；或用 PO chat 逐一討論。
+2. PO 為每個 story push 一個 `spec/` branch，conductor 開啟 pull request。核准它。核准就夠了：check 全綠之後它會自己合併。
+3. Planner 會在 sprint 接近完成時起草下一個 sprint。第一個真正的 sprint 需要手動請它起草：開一個 Claude Code session，要它依 `prompts/planner.md` 起草 sprint 002。
+4. 核准 sprint 的 pull request。它會自己合併，conductor 從這裡接手。
+
+Story pull request 的自動合併一開始是關閉的（shadow mode）。何時以及如何開啟，見 [operations-zh-TW.md](operations-zh-TW.md) 第 2 節。

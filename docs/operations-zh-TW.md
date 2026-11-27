@@ -2,57 +2,96 @@
 
 *English: [operations.md](operations.md)。兩份內容不一致時以英文版為準。*
 
-專案設定完成之後的運作。設定步驟在 [new-project-zh-TW.md](new-project-zh-TW.md) 與 [new-machine-zh-TW.md](new-machine-zh-TW.md)。
+專案設定完成之後的運作方式。設定的步驟在 [new-project-zh-TW.md](new-project-zh-TW.md) 與 [new-machine-zh-TW.md](new-machine-zh-TW.md)。
 
-## 1. 日常操作
+這裡的內容都還沒對真實的 GitHub 跑過。標示 **待驗證** 的地方，描述的是程式所依賴的 GitHub 本身的行為。
 
-Conductor 在哪裡跑由你決定。在電腦前時讓它跑在 terminal，不耗 Actions 額度，反應也快：
+## 1. 日常
+
+Conductor 在哪裡跑由你決定：在 GitHub Actions 上，或在你 Mac 的終端機裡。你在電腦前的時候，讓它在終端機裡跑。這樣不消耗 Actions 額度，反應也比較快（每三分鐘一輪）。
+
+`conductor here` 需要的東西：
+
+- **一份乾淨的 default branch checkout。** 當 checkout 裡的 `tools/`、`bin/`、`sandbox/` 或 `policy/` 與 default branch 不同時，它會拒絕啟動。請在 `main` 上執行，不要在審查中的 branch 上執行。每一輪它都從一份新的 `origin/main` 讀取 sprint、spec 與 policy，而不是從你的工作目錄讀。這項檢查防的是不小心在 agent 的 branch 上執行它的意外。它本身也是這些 script 的一部分，所以擋不住一份已經有敵意的 checkout。
+- **一個放在 repository 之外的設定檔**，位置是 `~/.config/agent-dev/<owner>-<repo>/conductor.env`（如果你設了 `$XDG_CONFIG_HOME`，就在它底下而不是 `~/.config`）。它不可以放在專案目錄裡：sandbox 讀得到那裡的每個檔案，包含被 git 忽略的檔案。檔案內容是一行一個 `KEY=VALUE`：
+
+```ini
+# The Conductor App (new-project.md, section 3). The key path must be absolute; "~" is not expanded.
+CONDUCTOR_APP_ID=123456
+CONDUCTOR_APP_KEY=/Users/YOU/.config/agent-dev/OWNER-REPO/conductor-app.pem
+# Your GitHub login. A local sandbox is not started for a story that the sprint file gives to someone else.
+DEVELOPER=YOUR_LOGIN
+# Dispatch credentials, the same values as the secrets in new-machine.md, section 3.
+CLAUDE_TRIGGER_URL=https://...
+CLAUDE_TRIGGER_TOKEN=...
+DISPATCH_TOKEN=...
+```
+
+  `CONDUCTOR_APP_ID`、`CONDUCTOR_APP_KEY` 與 `DEVELOPER` 是必要的；少了它們，`here`、`away` 與 `status` 都會停下來並顯示訊息。派發用的憑證則依你使用的 harness 而定。和在 Actions 上一樣，帶 `_LOGIN` 後綴的名稱（`CLAUDE_TRIGGER_URL_ALICE`）用於那位開發者的 story，不帶後綴的名稱是所有人的後備。多人的時候，請替每個人的憑證加上後綴，否則別人的 story 會用你的憑證送出。
+- 路徑上要有 `openssl`。它用來簽署取得 App token 的請求。
+
+本機的 conductor 在 GitHub 上以 Conductor App 的身分行動，和 Actions 的 job 完全一樣：它用那把 key 自己產生 App 的 token。它不是以你的身分行動。如果是，它開的 pull request 的作者就會是你，而 GitHub 不允許作者核准自己的 pull request。
+
+啟動：
 
 ```bash
 bin/agentctl conductor here
 ```
 
-外出前按 Ctrl-C，或在另一個 terminal 執行：
+離開前按 Ctrl-C，或在另一個終端機執行：
 
 ```bash
 bin/agentctl conductor away
 ```
 
-忘了交接也沒關係，lease 20 分鐘沒更新，Actions 的排程執行會自動接手。查看目前在哪裡：
+兩者都會立刻交接：把 `CONDUCTOR_HOME` 設為 `actions`，並在 Actions 上啟動一次 conductor 執行。
+
+如果你只是把筆電闔上，就沒有任何交接。`CONDUCTOR_HOME` 是 `local` 的期間，Actions 上由事件觸發的執行會被跳過。只有排程的執行與手動啟動的執行會去看 lease，而且要等 lease 超過 20 分鐘沒有續期才會接手（`policy/conductor.toml` 的 `local_lease_minutes`）。排程的執行每四小時一次，所以空窗最長可能到大約四小時。想早點結束空窗，就在 20 分鐘過後，從任何裝置手動啟動一次執行：
+
+```bash
+gh workflow run conductor.yml
+```
+
+還有兩種情況會讓本機的 conductor 結束。Lease 只在成功的一輪之後續期；連續三輪失敗之後，它會把 `CONDUCTOR_HOME` 設回 `actions` 並結束。另外，如果同一個 repo 又啟動了第二個 `conductor here`，lease 上的名字會變成新的那一個，第一個會在它的下一輪停止。Repository variable 不是鎖：交接前後，兩個 conductor 可能重疊一輪。派發是先記錄再送出，所以代價最多是一次重複的派發。
+
+想知道它現在在哪裡跑：
 
 ```bash
 bin/agentctl conductor status
 ```
 
-本機執行需要派工用的觸發網址與 token。在專案根目錄建立 `.env.conductor`（已列入 `.gitignore`），內容是 `CLAUDE_TRIGGER_URL=...`、`CLAUDE_TRIGGER_TOKEN=...` 這樣的行。
-
 | 情況 | 做法 |
 |---|---|
-| 想暫停一切 | 把 variable `CONDUCTOR_PAUSED` 設為 `true` |
+| 想暫停一切 | 把 variable `CONDUCTOR_PAUSED` 設為 `true`。它在每一輪都是即時讀取的，所以本機的 conductor 也會在一輪之內停下來。暫停中的 conductor 不派發任何東西，也不開 pull request |
 | 想知道現在的狀態 | 看 Director's brief issue，或執行 `bin/agentctl status --markdown` |
-| 想知道 conductor 接下來會做什麼 | `gh workflow run conductor.yml -f dry_run=true`，看執行紀錄 |
-| 某個 story 被標 `needs-human` | 讀 issue 上 triage 的說明與選項，決定後移除 label；需要改 spec 就改 spec |
-| 某個 harness 額度用盡 | 設 `CONDUCTOR_QUOTA`，到期後 conductor 會自動恢復使用 |
-| 想讓某個 story 暫時不做 | 在它的 issue 加上 `blocked` label |
-| 要上線 | 在 main 上你要的 commit 打 `v*` tag 並 push |
-| 想知道 Actions 用了多少 | `bin/agentctl budget --dry-run`，或看 brief 的第一行 |
-| 要修改 pipeline 本身 | 在 session 裡直接要求 agent，在 `chore/` branch 上進行，PR 由你核准 |
-| 懷疑有東西不對 | 暫停，然後跑一次 [redteam-project-zh-TW.md](redteam-project-zh-TW.md) 與 [redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) |
+| 想知道 conductor 接下來會做什麼 | `gh workflow run conductor.yml -f dry_run=true`，然後看執行紀錄。Dry run 不會建立任何東西。暫停期間它只顯示 `halt` |
+| 某個 story 被標上 `needs-human` | Conductor 會在 story issue 的留言裡提及人類；它不會把 issue 指派給任何人。讀 issue 上 triage 的說明與選項，做決定，然後移除 label；如果需要改 spec，就改 spec |
+| 某個 harness 額度用盡 | 設定 `CONDUCTOR_QUOTA`；到期後 conductor 會自動恢復使用該 harness |
+| 想讓某個 story 暫時不動 | 在它的 issue 加上 `blocked` label |
+| 想發版 | 在 main 上你要的 commit 打 `v*` tag 並 push。除非 `ci`、`security` 與 `spec-verify` 在那個 commit 上都存在而且是綠的，否則 release 會失敗 |
+| 想知道 Actions 用了多少 | `bin/agentctl budget --dry-run`，或看 brief 的第一行。這是估算；以 GitHub 的帳單頁面為準 |
+| Actions 額度快用完了 | Overflow 是關閉的：`policy/conductor.toml` 的 `overflow_runner` 是空的，所以 `agentctl budget` 只回報用量，不搬動任何東西。額度用完時 CI 會停止，什麼都不會合併（**待驗證**）。你的選項：等到下個月；付費買更多分鐘數；或把 `overflow_runner` 設為一個專供這些 job 使用、不持有任何憑證、每個 job 都重新建立的 runner。`sandbox/` 裡的 Lima VM 不符合條件：`ci` 與 `security` 會執行 pull request 的程式碼，而那個 VM 是長期存在的、有免密碼的 sudo，還存著 agent 的登入資訊。讓 conductor 在本機跑（見上）可以省下它那一份分鐘數 |
+| 某個 story 應該用特定某個人的訂閱來跑 | 在 sprint 檔裡指名：`assignee` 是整個 sprint 的預設，`[owners]` table 可以逐個 story 覆寫（`"012" = "alice"`）。Issue 的 assignee 不會被使用 |
+| 一個已核准的 spec、sprint 或 chore pull request | 不用做任何事。Conductor 開它的時候就啟用了 auto-merge，所以 check 全綠之後它會自己合併 |
+| 需要修改 pipeline 本身 | 在 session 中直接要求 agent；工作在 `chore/` branch 上進行，由你核准 PR |
+| 懷疑有異常 | 暫停，然後執行 [redteam-project-zh-TW.md](redteam-project-zh-TW.md) 與 [redteam-machine-zh-TW.md](redteam-machine-zh-TW.md) |
 
 ## 2. 開啟自動合併
 
-維持 shadow mode 至少一個 sprint。每次 conductor 通知「可以合併」時，花一分鐘自己判斷一次，記下你是否同意。連續同意一段時間後，在 `policy/conductor.toml` 設：
+這一節講的是 story 的 pull request。Spec、sprint 與 chore 的 pull request 不論這個設定為何，開啟時就啟用了 auto-merge：只要 check 全綠，而且它們需要的每個核准都已給出，就會自己合併。只改到沒有 owner 的文件的 chore pull request 是 T0，不需要任何核准，所以只要 check 全綠就會合併，在 shadow mode 下也一樣（**待驗證**）。
+
+至少維持 shadow mode 一個 sprint。每次 conductor 通知你某個 PR「可以合併」時，花一分鐘自己判斷，記下你是否同意。持續同意一段時間之後，在 `policy/conductor.toml` 設定：
 
 ```toml
 auto_merge_tiers = ["T0"]
 ```
 
-再過一段時間加上 `"T1"`。這個檔案的變更本身是 T2，需要你核准。
+再過一段時間，加上 `"T1"`。修改這個檔案本身是 T2，需要你核准。
 
-## 3. 新增一個人
+## 3. 加入一個人
 
-1. 加入 organization，成為 repo admin。
-2. 在 `policy/roles.toml` 把他加進 `humans`，並給他一個 `[developers.LOGIN.stages]` 區塊。在 `.github/CODEOWNERS` 把他加到他可以核准的路徑。只有在他要核准產品決定時，才加進 `directors` 與產品路徑。
-3. 他把 [new-machine-zh-TW.md](new-machine-zh-TW.md) 從頭到尾做完：自己的 agent App、自己的 secret（以他的帳號為後綴存放）、他的 sandbox、他自己的雲端帳號。
-4. 他名下的 story：在 story issue 上把 assignee 設為他，conductor 就會用他的 harness 設定、他的憑證與他的訂閱。
-5. 產品決定仍只由 director 核准：`docs/specs/`、`docs/sprints/`、`docs/product/` 的 owner 只列 director。
+1. 他加入 organization，並成為 repo admin。
+2. 在 `policy/roles.toml` 把他加進 `humans`，並給他一個 `[developers.LOGIN.stages]` table。在 `.github/CODEOWNERS` 把他加到他可以核准的路徑。只有在他要核准產品決定時，才把他加進 `directors` 與產品相關的路徑。
+3. 他把 [new-machine-zh-TW.md](new-machine-zh-TW.md) 從頭到尾做完：他自己的 agent App、他自己的 secret、他的 sandbox 與他自己的雲端帳號。他的 secret 放在 `conductor` 這個 environment 裡，不是 repository secret，並以他的帳號作為後綴（大寫，其他字元一律換成 `_`）：`DISPATCH_TOKEN_ALICE`。
+4. 屬於他的 story：在 sprint 檔的 `[owners]` table 裡指名（`"012" = "alice"`），或把他設為該 sprint 的 `assignee`。Conductor 就會使用他的 harness 設定、他的憑證與他的訂閱。在 story issue 上設定 assignee 沒有作用。在本機 sandbox 執行的 stage（`via = "sbx"`）只會在他自己的 Mac 上啟動，而且那台 Mac 上要有 `DEVELOPER` 設為他帳號的 `conductor here` 在跑。
+5. 產品決定仍然屬於 director：只有他們是 `docs/specs/`、`docs/sprints/` 與 `docs/product/` 的 owner。
