@@ -200,6 +200,9 @@ def cmd_reconcile(args) -> int:
             print(f"a local conductor holds the lease for {local_developer}; dispatching other developers' stories only")
 
             def only(action, context) -> bool:
+                # The kill switch is everybody's: a pause is acted on from here too.
+                if action.kind in ("halt", "disable-auto-merge"):
+                    return True
                 owner = context.get("assignees", {}).get(action.story, "")
                 return action.kind == "dispatch" and bool(owner) and owner != local_developer
 

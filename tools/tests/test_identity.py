@@ -198,6 +198,15 @@ class DispatchTests(unittest.TestCase):
         run = next(c for c in calls if c[:2] == ("workflow", "run"))
         self.assertIn("sha=abc", run)
 
+    def test_a_review_whose_token_is_missing_is_not_dispatched(self):
+        roles = {"harness": {"claude": {"via": "http", "review_workflow": "agent-review.yml"}}}
+        os.environ["CONDUCTOR_SECRETS"] = json.dumps({"CLAUDE_CODE_OAUTH_TOKEN": "shared"})
+        failures, calls = self.run_actions(roles, dict(stage="review", harness="claude", attempt=1))
+        self.assertEqual((failures, calls), (1, []))
+        os.environ["CONDUCTOR_SECRETS"] = json.dumps({"CLAUDE_CODE_OAUTH_TOKEN_ALICE": "hers"})
+        failures, calls = self.run_actions(roles, dict(stage="review", harness="claude", attempt=1))
+        self.assertEqual(failures, 0)
+
     def test_auto_merge_is_tied_to_the_commit_and_can_be_withdrawn(self):
         from agentctl.reconcile import Action
         github.gh = Recorder()

@@ -259,7 +259,8 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     mkdir -p "$log_dir"
     log="$log_dir/$story-$stage-$harness-$stamp.log"
     # In a subshell, so that a refusal inside it comes back here and is shown.
-    ( create "$name" "$harness" "$stage" ) > "$log" 2>&1 || { cat "$log" >&2; exit 1; }
+    # A sandbox that failed a check is removed: nobody is there to inspect it.
+    ( create "$name" "$harness" "$stage" ) > "$log" 2>&1 || { cat "$log" >&2; sbx rm --force "$name" >> "$log" 2>&1 || true; exit 1; }
     case "$harness" in
       claude) set -- -p "$prompt" ;;
       codex)  set -- exec "$prompt" ;;

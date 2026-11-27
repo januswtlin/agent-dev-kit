@@ -441,6 +441,10 @@ def preflight(action: Action, context: dict, roles: dict) -> None:
     if action.stage == "review" and harness.get("review_workflow"):
         if not context.get("prs", {}).get(action.story):
             raise SystemExit(f"story {action.story} has no open pull request to review")
+        # On Actions the conductor can see whether the review job will find its token.
+        token_env = harness.get("review_token_env", "CLAUDE_CODE_OAUTH_TOKEN")
+        if os.environ.get("CONDUCTOR_SECRETS") and not secret(token_env, developer):
+            raise SystemExit(f"no {token_env} configured for the review{who}")
     elif via == "sbx":
         if os.environ.get("GITHUB_ACTIONS") or not local:
             raise Deferred(f"harness '{action.harness}' runs in a local sandbox; waiting for `agentctl conductor here`")
