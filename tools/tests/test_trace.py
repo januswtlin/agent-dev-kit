@@ -135,6 +135,31 @@ level = "unit"
         self.assertIn("AC-001-2 is in spec.toml but not in story.md", problems)
         self.assertIn("TC-001-02 is in story.md but not in spec.toml", problems)
 
+    GOOD = 'id = "001"\ntouches = ["x"]\n[[ac]]\nid = "AC-001-1"\n[[tc]]\nid = "TC-001-01"\nac = ["AC-001-1"]\nlevel = "unit"\n'
+
+    def bilingual(self, en: str, zh: str | None, changed=None) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(Path(tmp), "001", self.GOOD, en)
+            if zh is not None:
+                (Path(tmp) / "001-x" / "story-zh-TW.md").write_text(zh, encoding="utf-8")
+            return "\n".join(specs.lint(tmp, changed))
+
+    def test_both_language_versions_must_exist_and_match_in_shape(self):
+        en = "# S\n## AC\nAC-001-1\n## TC\nTC-001-01\n"
+        self.assertEqual(self.bilingual(en, "# 故事\n## 驗收\nAC-001-1\n## 測試\nTC-001-01\n"), "")
+        self.assertIn("story-zh-TW.md is missing", self.bilingual(en, None))
+        self.assertIn("do not list the same AC/TC ids", self.bilingual(en, "# 故事\n## 驗收\nAC-001-1\n## 測試\n"))
+        self.assertIn("do not list the same AC/TC ids", self.bilingual(en, "# 故事\n## 驗收\nTC-001-01\n## 測試\nAC-001-1\n"))
+        self.assertIn("different sections", self.bilingual(en, "# 故事\n## 驗收\nAC-001-1 TC-001-01\n"))
+
+    def test_a_story_changed_in_one_language_only_is_reported(self):
+        en = "# S\nAC-001-1 TC-001-01\n"
+        zh = "# 故事\nAC-001-1 TC-001-01\n"
+        self.assertIn("story.md changed but story-zh-TW.md did not", self.bilingual(en, zh, {"docs/specs/001-x/story.md"}))
+        self.assertIn("story-zh-TW.md changed but story.md did not", self.bilingual(en, zh, {"docs/specs/001-x/story-zh-TW.md"}))
+        self.assertEqual(self.bilingual(en, zh, {"docs/specs/001-x/story.md", "docs/specs/001-x/story-zh-TW.md"}), "")
+        self.assertEqual(self.bilingual(en, zh, {"src/app.py"}), "")
+
     def test_reports_dependency_cycle_and_unknown_dependency(self):
         def toml(sid, dep):
             return (f'id = "{sid}"\ntouches = ["x"]\ndepends_on = ["{dep}"]\n[[ac]]\nid = "AC-{sid}-1"\n'

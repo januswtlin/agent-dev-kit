@@ -14,6 +14,7 @@ from pathlib import Path
 AC_RE = re.compile(r"\bAC-(\d{3})-(\d+)\b")
 TC_RE = re.compile(r"\bTC-(\d{3})-(\d{2})\b")
 STORY_MAX_LINES = 80
+STORY_ZH = "story-zh-TW.md"
 
 
 @dataclass
@@ -108,8 +109,25 @@ def find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
     return None
 
 
-def lint(specs_dir: str | Path) -> list[str]:
-    """Consistency checks run on every spec PR. Returns a list of problems."""
+def _ids_in_order(text: str) -> list[str]:
+    seen: list[str] = []
+    for m in re.finditer(r"\b(?:AC-\d{3}-\d+|TC-\d{3}-\d{2})\b", text):
+        if m.group(0) not in seen:
+            seen.append(m.group(0))
+    return seen
+
+
+def _heading_levels(text: str) -> list[int]:
+    return [len(m.group(1)) for m in re.finditer(r"^(#{1,6})\s", text, re.MULTILINE)]
+
+
+def lint(specs_dir: str | Path, changed: set[str] | None = None) -> list[str]:
+    """Consistency checks run on every spec PR. Returns a list of problems.
+
+    `changed` is the set of file paths (relative to the repository root, forward
+    slashes) touched by the pull request. When given, a story edited in one
+    language only is reported.
+    """
     problems: list[str] = []
     specs_dir = Path(specs_dir)
     specs: dict[str, Spec] = {}
@@ -180,6 +198,27 @@ def lint(specs_dir: str | Path) -> list[str]:
             lines = text.count("\n") + 1
             if lines > STORY_MAX_LINES:
                 problems.append(f"{where}: story.md has {lines} lines; keep it within {STORY_MAX_LINES} so it can be reviewed on one screen")
+
+            # The director reads and approves the Traditional Chinese rendering; agents
+            # build from the English one. They must at least have the same shape.
+            story_zh = folder / STORY_ZH
+            if not story_zh.exists():
+                problems.append(f"{where}: {STORY_ZH} is missing")
+            else:
+                zh = story_zh.read_text(encoding="utf-8")
+                if _ids_in_order(zh) != _ids_in_order(text):
+                    problems.append(f"{where}: story.md and {STORY_ZH} do not list the same AC/TC ids in the same order")
+                if _heading_levels(zh) != _heading_levels(text):
+                    problems.append(f"{where}: story.md and {STORY_ZH} have different sections")
+                zh_lines = zh.count("\n") + 1
+                if zh_lines > STORY_MAX_LINES:
+                    problems.append(f"{where}: {STORY_ZH} has {zh_lines} lines; keep it within {STORY_MAX_LINES}")
+                if changed is not None:
+                    touched = {name for name in ("story.md", STORY_ZH)
+                               if any(path.endswith(f"/{folder.name}/{name}") for path in changed)}
+                    if len(touched) == 1:
+                        other = STORY_ZH if "story.md" in touched else "story.md"
+                        problems.append(f"{where}: {touched.pop()} changed but {other} did not; update both together")
 
     for spec in specs.values():
         for dep in spec.depends_on:

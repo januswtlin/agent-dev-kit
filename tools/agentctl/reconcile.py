@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from .specs import find_cycle
 
 STAGES = ["design", "tests", "impl", "review"]
-MECHANICAL_CHECKS = ["ci", "security", "spec-trace", "red-green", "risk-gate"]
+MECHANICAL_CHECKS = ["ci", "security", "spec-verify", "risk-gate"]
 REVIEW_CHECK = "agent-review"
 
 
@@ -31,6 +31,9 @@ class PR:
     auto_merge: bool = False
     awaiting_human_review: bool = False
     tier: str = "T1"
+    # Story pull requests open as drafts. A draft only gets the cheap checks; the
+    # full gates run once the conductor marks it ready, after the impl stage.
+    draft: bool = False
 
 
 @dataclass
@@ -89,7 +92,7 @@ class State:
 
 @dataclass(frozen=True)
 class Action:
-    kind: str  # dispatch | update-branch | enable-auto-merge | escalate | notify | halt | draft-next-sprint
+    kind: str  # dispatch | mark-ready | update-branch | enable-auto-merge | escalate | notify | halt | draft-next-sprint
     story: str = ""
     stage: str = ""
     harness: str = ""
@@ -267,6 +270,12 @@ def plan(state: State, policy: dict | None = None, roles: dict | None = None) ->
 
         if pr is None:
             actions.append(Action("escalate", story=story.id, reason="stages reported done but no pull request exists"))
+            continue
+
+        if pr.draft:
+            # Implementation is done: ask for the full gates. They are skipped on a
+            # draft to save CI time, so there is nothing to wait for until this happens.
+            actions.append(Action("mark-ready", story=story.id))
             continue
 
         mechanical = _checks_state(pr, [c for c in MECHANICAL_CHECKS if c != "risk-gate"])

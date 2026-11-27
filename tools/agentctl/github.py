@@ -84,7 +84,7 @@ def collect(repo_root: Path) -> tuple[State, dict]:
 
     prs = gh_json(
         "pr", "list", "--state", "all", "--limit", "200", "--json",
-        "number,headRefName,state,mergedAt,createdAt,mergeable,mergeStateStatus,labels,"
+        "number,headRefName,state,isDraft,mergedAt,createdAt,mergeable,mergeStateStatus,labels,"
         "autoMergeRequest,reviewDecision,statusCheckRollup", default=[],
     )
     today = datetime.now(timezone.utc).date()
@@ -151,6 +151,7 @@ def collect(repo_root: Path) -> tuple[State, dict]:
                 auto_merge=bool(p.get("autoMergeRequest")),
                 awaiting_human_review=p.get("reviewDecision") == "REVIEW_REQUIRED",
                 tier=tier,
+                draft=bool(p.get("isDraft")),
             )
 
         blocked = gh_json("api", f"repos/{repo}/issues/{issue['number']}/dependencies/blocked_by", default=[]) or []
@@ -299,6 +300,10 @@ def _execute_one(action: Action, context: dict, roles: dict) -> None:
         marker = json.dumps({"stage": action.stage, "at": time.time(), "harness": action.harness, "attempt": action.attempt})
         gh("issue", "comment", issue, "--body",
            f"<!-- conductor {marker} -->\nDispatched **{action.stage}** to {action.harness} (attempt {action.attempt}). {action.reason}")
+    elif action.kind == "mark-ready":
+        number = context.get("prs", {}).get(action.story)
+        if number:
+            gh("pr", "ready", str(number))
     elif action.kind == "update-branch":
         pr = gh_json("pr", "list", "--search", f"head:story/{action.story}", "--json", "number", default=[])
         if pr:

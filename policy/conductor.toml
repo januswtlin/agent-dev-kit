@@ -23,9 +23,29 @@ draft_next_sprint_at = 0.8
 # T2 always needs a human approval and is never listed here.
 auto_merge_tiers = []
 
+# How long a local conductor (`agentctl conductor here`) may go silent before the
+# scheduled GitHub Actions run takes over. Covers a laptop closed without handing over.
+local_lease_minutes = 20
+
 [stage_timeout_minutes]
 default = 90
 design = 45
 review = 45
 triage = 30
 product-owner = 60
+
+# GitHub Actions budget. `agentctl budget` estimates month-to-date spend from job
+# records and moves the heavy jobs (ci, security) to the self-hosted runner in the
+# sandbox VM when it passes overflow_at. Jobs that judge a pull request never move.
+# Prices and the allowance change; check GitHub's billing pages and adjust.
+[actions]
+monthly_allowance_usd = 18.0          # GitHub Team
+overflow_at = 0.85
+hosted_runner = "ubuntu-latest"
+overflow_runner = ["self-hosted", "agent-sandbox"]
+light_labels = ["ubuntu-slim"]        # runner labels billed at the "light" price
+
+[actions.price_per_minute]
+standard = 0.006
+light = 0.002
+arm = 0.005

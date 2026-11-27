@@ -1,12 +1,20 @@
 name: ci
 
-# Mechanical gates. Job names are the required status checks in the ruleset:
-# ci, spec-trace, red-green. None of them trusts what an agent says it did.
+# Mechanical gates. Job names are required status checks in the ruleset: ci, spec-verify.
 #
-# Pull request code runs here with a read-only token and no secrets.
+# Minutes matter (every job is billed rounded up to a whole minute), so:
+#   - a draft pull request only gets lint; the full run happens when it is marked ready
+#   - the test suite runs once on head, plus once on base for a story branch, in ONE job
+#   - judging happens in a second, tiny job that executes no pull request code
+#
+# `ci` runs pull request code with a read-only token and no secrets. It may move
+# to the self-hosted runner in the sandbox VM when the monthly allowance runs low
+# (vars.CI_RUNNER, set by `agentctl budget`). `spec-verify` never moves: a machine
+# that ran the pull request's code must not be the one that judges it.
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -19,77 +27,104 @@ concurrency:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 45
+    env:
+      FULL: ${{ github.event_name == 'push' || github.event.pull_request.draft == false }}
+      HEAD_REF: ${{ github.head_ref }}
+      BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
+        if: runner.environment == 'github-hosted'
         with:
           python-version: "3.12"
       - run: make setup
       - run: make lint
-      - run: make test
+      - name: Both language versions of a story change together
+        if: github.event_name == 'pull_request'
+        run: bin/agentctl spec-lint --base "origin/$BASE_REF"
+
+      - name: Tests on head
+        id: tests
+        if: env.FULL == 'true'
+        continue-on-error: true
+        run: make test
+      - name: Tests on base with this branch's test files (story branches)
+        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        run: bin/agentctl redgreen-collect --base "origin/$BASE_REF" --out reports/base-overlay --branch "$HEAD_REF"
+      - name: Always leave a result file, so a missing artifact means a broken run
+        if: env.FULL == 'true'
+        run: |
+          mkdir -p reports/junit
+          [ -n "$(ls -A reports/junit)" ] || echo '<testsuites/>' > reports/junit/none.xml
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: env.FULL == 'true'
         with:
           name: junit
-          path: reports/junit/
-          if-no-files-found: ignore
+          path: reports/
+          retention-days: 90
+      - name: Fail when tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
 
-  spec-trace:
-    # Every approved test case must map to a test that ran and passed in this run,
-    # and no test case that passed on main may disappear.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  spec-verify:
+    # Traceability and red-green, judged from the result files with the tooling and
+    # policy of the base branch. Nothing from the pull request is executed here.
+    needs: ci
+    if: always() && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_REF: ${{ github.head_ref }}
+      BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: make setup
-      - name: Run tests on head
-        run: make test || true
-      - name: Run tests on base
+      - uses: actions/download-artifact@v4
+        with:
+          name: junit
+          path: head/reports
+      - name: Results of the last green run on the base branch
         if: github.event_name == 'pull_request'
         run: |
-          git worktree add --detach ../base "origin/${{ github.base_ref }}"
-          (cd ../base && make setup && make test) || true
-      - name: Trace (tooling and policy from base, so the PR cannot change its own judge)
-        if: github.event_name == 'pull_request'
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BASE_REF" --event push \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -z "$run_id" ]; then
+            echo "::warning::no green ci run on $BASE_REF yet; cannot check that passing test cases were kept"
+          else
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n junit -D main-reports
+          fi
+      - name: Traceability
+        working-directory: head
         env:
-          AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/../base
-          HEAD_REF: ${{ github.head_ref }}
+          AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
+          PYTHONPATH: ${{ github.workspace }}/base/tools
         run: |
-          PYTHONPATH=../base/tools python3 -m agentctl trace \
-            --junit 'reports/junit/*.xml' \
-            --base-junit '../base/reports/junit/*.xml' \
-            --branch "$HEAD_REF"
-      - name: Trace (main)
-        if: github.event_name == 'push'
-        run: bin/agentctl trace --junit 'reports/junit/*.xml'
-
-  red-green:
-    # The story's tests must fail on base and pass on head. A vacuous test passes on base.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: make setup
-      - name: Run tests on head
-        run: make test || true
+          set -- --junit 'reports/junit/*.xml'
+          [ -d ../main-reports ] && set -- "$@" --base-junit '../main-reports/junit/*.xml'
+          [ -n "$HEAD_REF" ] && set -- "$@" --branch "$HEAD_REF"
+          python3 -m agentctl trace "$@"
       - name: Red-green
         if: github.event_name == 'pull_request'
+        working-directory: head
         env:
-          HEAD_REF: ${{ github.head_ref }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git worktree add --detach ../base "origin/$BASE_REF"
-          AGENTCTL_TRUSTED_ROOT="$GITHUB_WORKSPACE/../base" PYTHONPATH=../base/tools \
-            python3 -m agentctl redgreen --base "origin/$BASE_REF" --branch "$HEAD_REF"
+          AGENTCTL_TRUSTED_ROOT: ${{ github.workspace }}/base
+          PYTHONPATH: ${{ github.workspace }}/base/tools
+        run: python3 -m agentctl redgreen-judge --base-dir reports/base-overlay --junit 'reports/junit/*.xml' --branch "$HEAD_REF"

@@ -25,7 +25,7 @@ it in the same branch. The director approves those edits together with the sprin
 
 A branch `sprint/NNN` with `docs/sprints/NNN.toml`. Push it; the conductor opens
 the pull request. Put this in your final comment on the sprint issue, for the
-pull request description:
+pull request description, in English and then in Traditional Chinese:
 
 - the stories in the order you expect them to run, one line each;
 - the dependency graph as a short list (`012 -> 014` means 014 waits for 012), with one sentence per edge saying why;

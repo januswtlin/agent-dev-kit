@@ -1,33 +1,35 @@
-# NNN 標題
+# NNN Title
 
-> 原始需求：（director 的原話）
+*繁體中文：[story-zh-TW.md](story-zh-TW.md). This English version governs if the two differ.*
+
+> Original requirement: (the director's own words)
 
 ## Story
 
-身為＿＿，我想＿＿，以便＿＿。
+As a ___, I want ___, so that ___.
 
 ## Acceptance criteria
 
-- **AC-NNN-1** WHEN ＿＿ THEN ＿＿。
+- **AC-NNN-1** WHEN ___ THEN ___.
 
 ## Test cases
 
-| ID | AC | 層級 | 描述 |
+| ID | AC | Level | Description |
 |---|---|---|---|
-| TC-NNN-01 | AC-NNN-1 | unit | ＿＿ |
+| TC-NNN-01 | AC-NNN-1 | unit | ___ |
 
 ## Done when
 
-- [ ] 所有 TC 在 CI 通過
+- [ ] Every TC passes in CI
 
 ## Clarifications
 
-- 問：＿＿ 答：＿＿
+- Q: ___ A: ___
 
 ## Assumptions
 
-- ＿＿
+- ___
 
 ## Out of scope
 
-- ＿＿
+- ___

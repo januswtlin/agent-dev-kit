@@ -23,7 +23,7 @@ jobs:
   brief:
     # Skipped until the conductor GitHub App is configured (docs/runbook.md, section 2.2).
     if: vars.CONDUCTOR_APP_ID != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
@@ -32,9 +32,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.CONDUCTOR_APP_ID }}
+          private-key: ${{ secrets.CONDUCTOR_APP_PRIVATE_KEY }}
+      - name: Actions budget
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: bin/agentctl budget | tee budget.txt
       - name: Build the brief
         env:
           CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
+          CONDUCTOR_HOME: ${{ vars.CONDUCTOR_HOME }}
           WEEKLY: ${{ github.event.schedule == '7 1 * * 1' || inputs.weekly }}
         run: |
           since="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
@@ -43,6 +53,9 @@ jobs:
             echo "# Director's brief $(date -u +%Y-%m-%d)"
             echo
             bin/agentctl status --markdown
+            head -1 budget.txt
+            echo "Conductor runs on: ${CONDUCTOR_HOME:-actions}"
+            echo
             echo "### Waiting for your review"
             gh pr list --search "review-requested:@me is:open" --json number,title \
               --jq '.[] | "- #\(.number) \(.title)"' 2>/dev/null || true

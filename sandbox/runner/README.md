@@ -1,18 +1,25 @@
 # Self-hosted runner inside the sandbox VM
 
-補充產能與備援。Mac 開著時，VM 裡的 runner 會自動領取 conductor 排進 GitHub 的
-`agent-job`，不需要人下指令。Ollama 的任務只能走這條路。
+*繁體中文：[README-zh-TW.md](README-zh-TW.md). The English version governs if the two differ.*
 
-雲端 session 仍是主力，因為筆電闔上時它們照常運作。
+Extra capacity and a fallback. While the Mac is on, the runner in the VM picks up
+the `agent-job` runs the conductor queues on GitHub. Nobody has to start them.
+Ollama stages can only run here.
 
-## 安全前提
+Cloud sessions remain the main path, because they keep working with the laptop closed.
 
-- Runner 裝在 VM 裡，不是裝在 macOS 上。VM 只掛載專案目錄，對外連線受 allowlist 限制。
-- Runner 只服務這一個 private repo。不要把它註冊到 public repo：任何人開的 PR 都能在上面執行程式。
-- VM 裡的 Claude Code 與 Codex 以你自己的訂閱登入；`auth.json` 與登入狀態視同密碼，只存在 VM 內。
-- Workflow 用的 `AGENT_TOKEN` 是 machine user 的 fine-grained token，沒有 Workflows、Administration、Commit statuses 權限。
+The runner has a second use. When the month's Actions allowance is nearly spent,
+`agentctl budget` moves `ci` and `security`, the two heavy jobs that execute pull
+request code, onto it. Jobs that judge a pull request never come here.
 
-## 安裝
+## Security requirements
+
+- The runner is installed in the VM, not on macOS. The VM mounts the project directory only, and its outbound traffic is limited by the allowlist.
+- The runner serves this one private repository. Never register it with a public repository: anyone who opens a pull request could run code on it.
+- Claude Code and Codex in the VM are logged in with your own subscription. Treat `auth.json` and the login state as passwords; they exist only inside the VM.
+- `AGENT_TOKEN`, used by the workflow, is the machine user's fine-grained token. It has no Workflows, Administration or Commit statuses permission.
+
+## Installation
 
 ```bash
 sandbox/vm.sh up
@@ -22,7 +29,7 @@ sandbox/vm.sh up
 sandbox/vm.sh shell
 ```
 
-以下在 VM 內執行。註冊用的 token 到 repo 的 Settings > Actions > Runners > New self-hosted runner 取得（Linux ARM64），依頁面指示下載並解壓到 `~/actions-runner`，然後：
+The rest runs inside the VM. Get a registration token from the repository's Settings > Actions > Runners > New self-hosted runner (Linux ARM64), download and unpack the runner into `~/actions-runner` as that page says, then:
 
 ```bash
 cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token REGISTRATION_TOKEN --labels agent-sandbox --unattended
@@ -32,7 +39,13 @@ cd ~/actions-runner && ./config.sh --url https://github.com/OWNER/REPO --token R
 sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
-在 VM 內登入兩個 harness（各做一次）：
+Install the deny rules for story agents (no editing of guardrail paths or approved specs):
+
+```bash
+mkdir -p ~/.claude && cp /workspace/sandbox/story-agent.claude-settings.json ~/.claude/settings.json
+```
+
+Log in to both harnesses inside the VM, once each:
 
 ```bash
 claude
@@ -42,18 +55,19 @@ claude
 codex login
 ```
 
-## 讓 VM 隨 Mac 登入自動啟動
+## Start the VM at login
 
-把 `com.agent-sandbox.vm.plist` 複製到 `~/Library/LaunchAgents/`，將其中的
-`PROJECT_DIR` 換成專案的絕對路徑，然後：
+Copy `com.agent-sandbox.vm.plist` to `~/Library/LaunchAgents/`, replace
+`PROJECT_DIR` in it with the absolute path of the project, then:
 
 ```bash
 launchctl load ~/Library/LaunchAgents/com.agent-sandbox.vm.plist
 ```
 
-MacBook Air 闔上螢幕就會睡眠，睡眠期間 runner 離線，排隊中的工作會等到喚醒後才執行。
-這是把雲端當主力的原因。
+A MacBook Air sleeps when the lid closes. The runner is offline while it sleeps,
+and queued work waits until it wakes. That is why the cloud is the main path.
 
-## 尚未驗證
+## Not yet verified
 
-這份設定還沒在實機上跑過。完成後請執行 `docs/redteam-checklist.md`。
+This setup has not been run on a real machine yet. When it is in place, run
+`docs/redteam-checklist.md`.

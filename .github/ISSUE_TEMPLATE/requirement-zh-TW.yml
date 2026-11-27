@@ -1,0 +1,18 @@
+name: 需求
+description: 一行需求。PO agent 會把它寫成 story 給你核准。
+title: "需求："
+labels: ["requirement"]
+body:
+  - type: textarea
+    id: requirement
+    attributes:
+      label: 一行需求
+      description: 用一兩句話說使用者要能做什麼。細節由 PO agent 提問後補上。
+      placeholder: 使用者可以透過轉帳付款並且附上轉帳憑證，商店負責人檢視憑證後給予 pass。
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補充（選填）
+      description: 已經確定的限制、不做的範圍、相關的既有功能。

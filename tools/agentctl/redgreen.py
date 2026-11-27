@@ -38,8 +38,12 @@ def test_files_to_overlay(repo: Path, base: str, spec: Spec, test_paths: list[st
     return selected
 
 
-def run_on_base(repo: Path, base: str, overlay: list[str], test_cmd: str, junit_glob: str) -> dict[str, TcResult]:
-    """Check out `base` in a temporary worktree, overlay the test files, run the tests."""
+def run_on_base(repo: Path, base: str, overlay: list[str], test_cmd: str, junit_glob: str,
+                out_dir: Path | None = None) -> dict[str, TcResult]:
+    """Check out `base` in a temporary worktree, overlay the test files, run the tests.
+
+    With `out_dir`, the JUnit files produced on base are copied there.
+    """
     tmp = Path(tempfile.mkdtemp(prefix="redgreen-"))
     worktree = tmp / "base"
     _git(["worktree", "add", "--detach", str(worktree), base], repo)
@@ -50,6 +54,10 @@ def run_on_base(repo: Path, base: str, overlay: list[str], test_cmd: str, junit_
             shutil.copy2(repo / rel, target)
         # A non-zero exit is the expected outcome here, so it is not an error.
         subprocess.run(test_cmd, shell=True, cwd=worktree, capture_output=True, text=True)
+        if out_dir is not None:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for produced in sorted(worktree.glob(junit_glob)):
+                shutil.copy2(produced, out_dir / produced.name)
         return parse_junit([str(worktree / junit_glob)])
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=repo, capture_output=True)

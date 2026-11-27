@@ -1,14 +1,22 @@
 name: conductor
 
-# The reconciler. Stateless: every run observes GitHub and dispatches whatever
-# should happen next. Runs on events for fast reaction and hourly as a heartbeat
-# that catches stalls and missed events.
+# The reconciler on GitHub Actions. Stateless: every run observes GitHub and
+# dispatches whatever should happen next.
+#
+# The same program can run in a terminal instead (`agentctl conductor here`),
+# which costs no Actions minutes. While a local conductor holds the lease
+# (vars.CONDUCTOR_HOME == 'local'), event-triggered runs here are skipped; the
+# scheduled run still starts, and takes over if the lease has gone stale, for
+# example because the laptop was closed without `agentctl conductor away`.
+#
+# Events drive it; the schedule only catches stalls and missed events. Every run
+# is billed as at least one minute, so the schedule is deliberately sparse.
 #
 # Kill switch: set the repository variable CONDUCTOR_PAUSED to true.
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "17 */4 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -21,11 +29,12 @@ on:
     types: [submitted]
   issues:
     types: [labeled, unlabeled]
-  check_suite:
+  workflow_run:
+    workflows: [ci]
     types: [completed]
   push:
     branches: [main]
-    paths: ["docs/sprints/**"]
+    paths: ["docs/sprints/**", "docs/product/roadmap.md"]
 
 permissions:
   contents: read
@@ -37,8 +46,10 @@ concurrency:
 jobs:
   reconcile:
     # Skipped until the conductor GitHub App is configured (docs/runbook.md, section 2.2).
-    if: vars.CONDUCTOR_APP_ID != ''
-    runs-on: ubuntu-latest
+    if: >-
+      vars.CONDUCTOR_APP_ID != '' &&
+      (vars.CONDUCTOR_HOME != 'local' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/create-github-app-token@v1
@@ -57,10 +68,17 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CONDUCTOR_PAUSED: ${{ vars.CONDUCTOR_PAUSED }}
+          CONDUCTOR_HOME: ${{ vars.CONDUCTOR_HOME }}
+          CONDUCTOR_LEASE: ${{ vars.CONDUCTOR_LEASE }}
           CONDUCTOR_QUOTA: ${{ vars.CONDUCTOR_QUOTA }}
           CLAUDE_TRIGGER_URL: ${{ secrets.CLAUDE_TRIGGER_URL }}
           CLAUDE_TRIGGER_TOKEN: ${{ secrets.CLAUDE_TRIGGER_TOKEN }}
           DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          if [ "$DRY_RUN" = "true" ]; then bin/agentctl reconcile --dry-run; else bin/agentctl reconcile; fi
+          if [ "$DRY_RUN" = "true" ]; then bin/agentctl reconcile --respect-lease --dry-run; else bin/agentctl reconcile --respect-lease; fi
+      - name: Actions budget (scheduled runs)
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: bin/agentctl budget

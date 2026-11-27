@@ -1,11 +1,12 @@
 name: security
 
-# Required status check: security.
+# Required status check: security. Skipped on draft pull requests.
 # New or changed dependencies are not judged here; they are routed to a human
 # by the risk gate (policy/risk-tiers.toml, dependency_manifests).
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -17,26 +18,37 @@ env:
 
 jobs:
   security:
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
+    env:
+      BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Secret scan (gitleaks)
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /tmp gitleaks
+          case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; *) arch=x64 ;; esac
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${arch}.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
           if [ -n "$BASE_REF" ]; then
-            /tmp/gitleaks git --redact --log-opts="origin/${BASE_REF}..HEAD" .
+            "$RUNNER_TEMP/gitleaks" git --redact --log-opts="origin/${BASE_REF}..HEAD" .
           else
-            /tmp/gitleaks git --redact --log-opts="-1" .
+            "$RUNNER_TEMP/gitleaks" git --redact --log-opts="-1" .
+          fi
+
+      - name: Is there code to analyse?
+        id: code
+        run: |
+          if [ -n "$BASE_REF" ]; then range="origin/${BASE_REF}...HEAD"; else range="HEAD~1..HEAD"; fi
+          if git diff --name-only "$range" | grep -Evq '(^docs/|\.md$|\.toml$|\.txt$)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Static analysis (semgrep)
+        if: steps.code.outputs.changed == 'true'
         run: |
-          python3 -m pip install --quiet semgrep
-          semgrep scan --config auto --error --quiet --exclude tools/tests
+          python3 -m venv "$RUNNER_TEMP/semgrep" && "$RUNNER_TEMP/semgrep/bin/pip" install --quiet semgrep
+          "$RUNNER_TEMP/semgrep/bin/semgrep" scan --config auto --error --quiet --exclude tools/tests

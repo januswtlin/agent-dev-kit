@@ -7,3 +7,4 @@ __pycache__/
 review-verdict.json
 review-findings.md
 .claude/settings.local.json
+.env.conductor

@@ -1,49 +1,51 @@
-# 000 轉帳付款並上傳憑證
+# 000 Pay by bank transfer with proof of payment
 
-> 原始需求：使用者可以透過轉帳付款並且附上轉帳憑證，商店負責人檢視憑證後給予 pass。
+*繁體中文：[story-zh-TW.md](story-zh-TW.md). This English version governs if the two differ.*
+
+> Original requirement: 使用者可以透過轉帳付款並且附上轉帳憑證，商店負責人檢視憑證後給予 pass。
 
 ## Story
 
-身為顧客，我想用銀行轉帳付款並上傳轉帳憑證，讓不使用線上金流的我也能完成訂單。
-身為商店負責人，我想檢視憑證後決定通過或退回，確認款項真的入帳才出貨。
+As a customer, I want to pay by bank transfer and upload proof of the transfer, so that I can complete an order without online payment.
+As a shop owner, I want to look at the proof and then pass or reject it, so that I only ship once the money has really arrived.
 
 ## Acceptance criteria
 
-- **AC-000-1** WHEN 顧客對待付款訂單選擇轉帳付款並上傳一張憑證 THEN 訂單進入待審核。
-- **AC-000-2** WHEN 商店負責人檢視憑證並標記通過 THEN 訂單變為已付款。
-- **AC-000-3** WHEN 商店負責人退回憑證並填寫原因 THEN 訂單回到待付款，顧客可重新上傳。
-- **AC-000-4** 只有該商店的負責人能檢視與審核憑證。
+- **AC-000-1** WHEN a customer chooses bank transfer for an order awaiting payment and uploads one proof THEN the order moves to awaiting review.
+- **AC-000-2** WHEN the shop owner views the proof and marks it passed THEN the order becomes paid.
+- **AC-000-3** WHEN the shop owner rejects the proof with a reason THEN the order returns to awaiting payment and the customer can upload again.
+- **AC-000-4** Only the owner of that shop can view and review the proof.
 
 ## Test cases
 
-| ID | AC | 層級 | 描述 |
+| ID | AC | Level | Description |
 |---|---|---|---|
-| TC-000-01 | AC-000-1 | integration | 待付款訂單上傳憑證後，狀態變為待審核 |
-| TC-000-02 | AC-000-1 | unit | 非圖片或超過 10MB 的檔案被拒絕，訂單狀態不變 |
-| TC-000-03 | AC-000-2 | integration | 負責人標記通過後，訂單變為已付款並記錄審核者與時間 |
-| TC-000-04 | AC-000-3 | integration | 退回時必須填原因；退回後訂單回到待付款，顧客可再次上傳 |
-| TC-000-05 | AC-000-4 | integration | 其他商店的負責人與一般顧客檢視憑證時得到拒絕 |
-| TC-000-06 | AC-000-2 | unit | 已付款的訂單不能再次審核 |
+| TC-000-01 | AC-000-1 | integration | Uploading a proof to an order awaiting payment moves it to awaiting review |
+| TC-000-02 | AC-000-1 | unit | A file that is not an image or PDF, or is over 10 MB, is refused and the order does not change |
+| TC-000-03 | AC-000-2 | integration | After the owner passes it, the order is paid and the reviewer and time are recorded |
+| TC-000-04 | AC-000-3 | integration | Rejecting needs a reason; afterwards the order awaits payment and the customer can upload again |
+| TC-000-05 | AC-000-4 | integration | Another shop's owner and an ordinary customer are refused when they try to view the proof |
+| TC-000-06 | AC-000-2 | unit | An order that is already paid cannot be reviewed again |
 
 ## Done when
 
-- [ ] 所有 TC 在 CI 通過
-- [ ] 已部署到 staging
-- [ ] 負責人在 staging 上實際走過一次通過與退回流程（manual）
+- [ ] Every TC passes in CI
+- [ ] Deployed to staging
+- [ ] The owner has walked through one pass and one rejection on staging (manual)
 
 ## Clarifications
 
-- 問：憑證被退回後訂單狀態為何？答：回到待付款，可重新上傳，不限次數。
-- 問：金額不符由誰判定？答：由負責人人工判定，系統不做比對。
-- 問：通過後能否撤銷？答：這個 story 不做，另開 story。
+- Q: What state is the order in after a rejection? A: Back to awaiting payment; the customer may upload again, with no limit.
+- Q: Who decides when the amount does not match? A: The owner, by eye. The system does not compare amounts.
+- Q: Can a pass be undone? A: Not in this story. A separate story.
 
 ## Assumptions
 
-- 一張訂單同時只有一張有效憑證，重新上傳會取代前一張。
-- 憑證接受 JPG、PNG、PDF，上限 10MB。
-- 顧客在通過或退回時收到站內通知，不寄 email。
+- An order has one valid proof at a time; a new upload replaces the previous one.
+- Proofs may be JPG, PNG or PDF, up to 10 MB.
+- The customer gets an in-app notice on pass or rejection. No email.
 
 ## Out of scope
 
-- 自動對帳、銀行 API 串接。
-- 已通過的付款撤銷或退款。
+- Automatic reconciliation or bank API integration.
+- Undoing a passed payment, or refunds.

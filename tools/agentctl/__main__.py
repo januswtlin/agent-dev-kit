@@ -8,10 +8,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
-from . import doctor, redgreen, risk, specs, trace
+from . import budget, docs, doctor, lease, redgreen, risk, specs, trace
 
 
 def _root() -> Path:
@@ -63,7 +64,16 @@ def cmd_risk(args) -> int:
 
 
 def cmd_spec_lint(args) -> int:
-    return _finish("spec lint", specs.lint(_root() / "docs/specs"))
+    changed = None
+    if args.base:
+        out = subprocess.run(["git", "diff", "--name-only", "--no-renames", f"{args.base}...HEAD"],
+                             check=True, capture_output=True, text=True).stdout
+        changed = {line for line in out.splitlines() if line}
+    return _finish("spec lint", specs.lint(_root() / "docs/specs", changed))
+
+
+def cmd_docs_lint(args) -> int:
+    return _finish("docs lint", docs.lint(_root()))
 
 
 def cmd_trace(args) -> int:
@@ -91,6 +101,41 @@ def cmd_redgreen(args) -> int:
     return _finish("red-green", redgreen.check(spec, base_results, head_results))
 
 
+def cmd_redgreen_collect(args) -> int:
+    """Run the story's tests on the base commit and keep the JUnit files (runs PR code)."""
+    root = _root()
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    project = _toml(root / "policy/project.toml")
+    story = args.story or _story_from_branch(args.branch or _current_branch())
+    all_specs = specs.load_all(root / "docs/specs")
+    if not story or story not in all_specs:
+        print("red-green: no story on this branch, nothing to collect")
+        return 0
+    overlay = redgreen.test_files_to_overlay(root, args.base, all_specs[story], project.get("test_paths", []))
+    print("overlaying on base:", ", ".join(overlay) or "(nothing)")
+    redgreen.run_on_base(root, args.base, overlay, project["test_cmd"], project["junit_glob"], out_dir=out)
+    (out / "collected.json").write_text(json.dumps({"story": story, "base": args.base, "overlay": overlay}), encoding="utf-8")
+    return 0
+
+
+def cmd_redgreen_judge(args) -> int:
+    """Judge red-green from JUnit files only. Executes no project code."""
+    story = args.story or _story_from_branch(args.branch or _current_branch())
+    all_specs = specs.load_all(_root() / "docs/specs")
+    if not story or story not in all_specs:
+        print("red-green: no story on this branch, nothing to check")
+        return 0
+    base_dir = Path(args.base_dir)
+    marker = base_dir / "collected.json"
+    # No JUnit file on base means every test was red there, which is a pass. So an
+    # absent collection step must not be mistaken for that.
+    if not marker.exists() or json.loads(marker.read_text(encoding="utf-8")).get("story") != story:
+        return _finish("red-green", [f"no base results for story {story}: the collection step did not run"])
+    return _finish("red-green", redgreen.check(all_specs[story], trace.parse_junit([str(base_dir / "*.xml")]),
+                                               trace.parse_junit(args.junit)))
+
+
 def cmd_evidence(args) -> int:
     root = _root()
     all_specs = specs.load_all(root / "docs/specs")
@@ -101,18 +146,102 @@ def cmd_evidence(args) -> int:
     return 0
 
 
-def cmd_reconcile(args) -> int:
+def _reconcile_once(root: Path, dry_run: bool) -> int:
     from . import github, reconcile
 
-    root = _root()
     policy = _toml(root / "policy/conductor.toml")
     roles = _toml(root / "policy/roles.toml")
     state, context = github.collect(root)
     actions = reconcile.plan(state, policy, roles)
     if not actions:
         print("nothing to do")
-    failures = github.execute(actions, context, roles, dry_run=args.dry_run)
-    return 1 if failures else 0
+    return github.execute(actions, context, roles, dry_run=dry_run)
+
+
+def cmd_reconcile(args) -> int:
+    from . import github
+
+    root = _root()
+    if args.respect_lease:
+        # On GitHub Actions: stand down while a local conductor holds a fresh lease.
+        ttl = _toml(root / "policy/conductor.toml").get("local_lease_minutes", 20)
+        verdict = lease.decide(os.environ.get("CONDUCTOR_HOME", ""), os.environ.get("CONDUCTOR_LEASE", ""), time.time(), ttl)
+        if verdict == "skip":
+            print("a local conductor holds the lease; nothing to do here")
+            return 0
+        if verdict == "takeover" and not args.dry_run:
+            print("the local conductor's lease expired; GitHub Actions takes over")
+            github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
+    return 1 if _reconcile_once(root, args.dry_run) else 0
+
+
+def cmd_conductor(args) -> int:
+    """Run the conductor in this terminal, or hand it back to GitHub Actions."""
+    from . import github
+
+    repo = _root()
+    if args.where == "status":
+        home = github.gh("variable", "get", "CONDUCTOR_HOME", check=False).strip() or "actions"
+        stamp = github.gh("variable", "get", "CONDUCTOR_LEASE", check=False).strip()
+        age = f", last local pass {int((time.time() - float(stamp)) / 60)} min ago" if stamp.replace(".", "").isdigit() else ""
+        print(f"conductor runs on: {home}{age}")
+        return 0
+    if args.where == "away":
+        github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions")
+        github.gh("workflow", "run", "conductor.yml", check=False)
+        print("handed over to GitHub Actions")
+        return 0
+
+    os.environ.update(lease.load_env_file(repo / ".env.conductor"))
+    github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "local")
+    print(f"conductor is running here, every {args.interval}s. Ctrl-C hands over to GitHub Actions.")
+    try:
+        while True:
+            if github.gh("variable", "get", "CONDUCTOR_HOME", check=False).strip() != "local":
+                print("another conductor took over; stopping")
+                return 0
+            try:
+                _reconcile_once(lease.fresh_main_checkout(repo), args.dry_run)
+            except (subprocess.CalledProcessError, OSError, SystemExit) as exc:
+                print(f"pass failed: {exc}")  # keep going; the next pass starts from scratch
+            github.gh("variable", "set", "CONDUCTOR_LEASE", "--body", str(int(time.time())), check=False)
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "actions", check=False)
+        github.gh("workflow", "run", "conductor.yml", check=False)
+        print("\nhanded over to GitHub Actions")
+        return 0
+
+
+def cmd_budget(args) -> int:
+    """Estimate month-to-date Actions spend and move heavy CI when it nears the allowance."""
+    from . import github
+
+    cfg = budget.settings(_toml(_root() / "policy/conductor.toml"))
+    repo = github.gh_json("repo", "view", "--json", "nameWithOwner")["nameWithOwner"]
+    try:
+        usage = json.loads(github.gh("variable", "get", "ACTIONS_USAGE", check=False) or "null")
+    except json.JSONDecodeError:
+        usage = None
+    now = time.time()
+    month = budget.month_of(now)
+    since = usage["through"] if usage and usage.get("month") == month else budget.month_start_iso(month)
+    run_ids = github.gh("api", "--paginate", f"repos/{repo}/actions/runs?status=completed&created=>={since[:10]}&per_page=100",
+                        "--jq", ".workflow_runs[].id", check=False).split()
+    jobs: list[dict] = []
+    for run_id in run_ids:
+        jobs.extend(github.gh_json("api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+                                   "--jq", ".jobs", default=[]) or [])
+    usage = budget.accumulate(usage, jobs, now, cfg)
+    runner, reason = budget.choose_runner(usage, cfg)
+    print(budget.summary(usage, runner, cfg))
+    if not args.dry_run:
+        github.gh("variable", "set", "ACTIONS_USAGE", "--body", json.dumps(usage))
+        current = github.gh("variable", "get", "CI_RUNNER", check=False).strip()
+        if current != runner:
+            github.gh("variable", "set", "CI_RUNNER", "--body", runner)
+            print(f"CI_RUNNER -> {runner} ({reason})")
+    return 0
 
 
 def cmd_status(args) -> int:
@@ -188,7 +317,35 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_risk)
 
     p = sub.add_parser("spec-lint", help="check story specs for consistency")
+    p.add_argument("--base", help="also require both language versions of a story to change together since this ref")
     p.set_defaults(func=cmd_spec_lint)
+
+    p = sub.add_parser("docs-lint", help="check that every document has its -zh-TW counterpart with the same structure")
+    p.set_defaults(func=cmd_docs_lint)
+
+    p = sub.add_parser("redgreen-collect", help="run the story's tests on the base commit and keep the JUnit files")
+    p.add_argument("--base", default="origin/main")
+    p.add_argument("--out", required=True)
+    p.add_argument("--story")
+    p.add_argument("--branch")
+    p.set_defaults(func=cmd_redgreen_collect)
+
+    p = sub.add_parser("redgreen-judge", help="judge red-green from JUnit files only")
+    p.add_argument("--base-dir", required=True, help="directory written by redgreen-collect")
+    p.add_argument("--junit", nargs="+", required=True)
+    p.add_argument("--story")
+    p.add_argument("--branch")
+    p.set_defaults(func=cmd_redgreen_judge)
+
+    p = sub.add_parser("conductor", help="run the conductor in this terminal (here), hand it to Actions (away), or show where it runs")
+    p.add_argument("where", choices=["here", "away", "status"])
+    p.add_argument("--interval", type=int, default=180, help="seconds between passes when running here")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_conductor)
+
+    p = sub.add_parser("budget", help="estimate this month's Actions spend; move heavy CI to self-hosted near the allowance")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_budget)
 
     p = sub.add_parser("trace", help="check that every approved test case ran and passed")
     p.add_argument("--junit", nargs="+", required=True, help="glob(s) of JUnit XML files")
@@ -211,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("reconcile", help="conductor: observe GitHub and dispatch the next actions")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--respect-lease", action="store_true", help="stand down while a local conductor holds the lease")
     p.set_defaults(func=cmd_reconcile)
 
     p = sub.add_parser("status", help="deterministic sprint summary used by the director's brief")

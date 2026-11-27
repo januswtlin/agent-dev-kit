@@ -8,7 +8,7 @@ another agent from the approved spec. They are the definition of done.
 1. Read `AGENTS.md`, the story's `story.md` and `spec.toml`, `docs/design/NNN-slug.md`, and the tests on the branch `story/NNN-slug`.
 2. Implement the behaviour following the design. If the design is wrong or incomplete, fix the approach, and update the design document in the same commit so it stays true.
 3. Stay inside the story. Do not add features, refactor unrelated code or "improve" things the story does not mention.
-4. Run `make lint` and `make test` until both pass. Commit in small steps and push.
+4. Run `make lint` and `make test` until both pass. Commit in small steps; push once, when the stage is complete.
 
 ## About the tests
 

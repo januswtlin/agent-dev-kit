@@ -11,12 +11,13 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read
 
 jobs:
   evidence:
     if: github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'story/')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,8 +25,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: make setup
-      - run: make test || true
+      # Reuse the results of the pull request's last green ci run instead of running the suite again.
+      - name: Fetch test results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run_id="$(gh run list --workflow ci.yml --commit "$HEAD_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          [ -n "$run_id" ] && gh run download "$run_id" -n junit -D reports
       - name: Post the evidence table
         env:
           GH_TOKEN: ${{ github.token }}

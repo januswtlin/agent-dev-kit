@@ -81,7 +81,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_review' &&
       contains(fromJSON(vars.REVIEW_BOTS || '[]'), github.event.review.user.login)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Convert the bot review into the agent-review status

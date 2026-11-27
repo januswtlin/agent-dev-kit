@@ -20,6 +20,7 @@ setup:
 lint: project-lint
 	@python3 -m compileall -q tools >/dev/null
 	@bin/agentctl spec-lint
+	@bin/agentctl docs-lint
 
 test: tools-test project-test
 

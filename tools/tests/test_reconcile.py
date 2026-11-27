@@ -4,7 +4,7 @@ import unittest
 from agentctl.reconcile import PR, Dispatch, State, Story, plan
 
 NOW = 1_000_000.0
-GREEN = {"ci": "success", "security": "success", "spec-trace": "success", "red-green": "success", "risk-gate": "success"}
+GREEN = {"ci": "success", "security": "success", "spec-verify": "success", "risk-gate": "success"}
 ROLES = {
     "developers": {
         "alice": {"stages": {"design": ["claude"], "tests": ["claude"], "impl": ["claude", "codex"],
@@ -90,7 +90,7 @@ class Progressing(unittest.TestCase):
 
     def test_failing_checks_send_it_back_for_a_fix(self):
         done = {"design", "tests", "impl"}
-        s = story("001", stage_done=done, pr=PR(1, checks=dict(GREEN, **{"red-green": "failure"})),
+        s = story("001", stage_done=done, pr=PR(1, checks=dict(GREEN, **{"spec-verify": "failure"})),
                   last_dispatch=Dispatch("impl", NOW - 60))
         self.assertEqual(kinds(run(state(s))), [("dispatch", "001", "fix")])
 
@@ -128,6 +128,14 @@ class Progressing(unittest.TestCase):
         self.assertEqual(kinds(actions), [("notify", "001", "")])
         self.assertEqual(run(state(s, notified={"ready-to-merge/001"}))[0].reason,
                          "every remaining story is blocked on a human; development has stopped")
+
+    def test_draft_is_marked_ready_after_impl_and_not_before(self):
+        early = story("001", stage_done={"design", "tests"}, pr=PR(1, draft=True), last_dispatch=Dispatch("tests", NOW - 60))
+        self.assertEqual(kinds(run(state(early))), [("dispatch", "001", "impl")])
+        done = story("001", stage_done={"design", "tests", "impl"}, pr=PR(1, draft=True), last_dispatch=Dispatch("impl", NOW - 60))
+        self.assertEqual(kinds(run(state(done))), [("mark-ready", "001", "")])
+        done.pr.draft = False  # checks have not reported yet
+        self.assertEqual(run(state(done)), [])
 
     def test_merge_conflict_gets_a_resolution_task(self):
         s = story("001", stage_done={"design", "tests", "impl"}, pr=PR(1, checks=GREEN, conflicted=True),
