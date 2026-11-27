@@ -35,9 +35,10 @@ gh variable get --help
 Each developer creates a GitHub App for their own agents, so that a commit or a comment shows whose agent made it. Under your account's Settings > Developer settings > GitHub Apps:
 
 - Name it after yourself, for example `yourname-agent`.
+- Under "Where can this GitHub App be installed?", choose **Any account** if the project's repo belongs to an organization, which is the usual case. An App that is limited to "Only on this account" can be installed on your personal account only, and not on the organization's repo. Alternatively, create the App under the organization (its Settings > Developer settings > GitHub Apps); you need to be an organization owner, or have been made an App manager, for that.
 - Repository permissions: Contents: Read and write; Pull requests: Read and write; Issues: Read and write; Metadata: Read. Nothing else. In particular, **not** Workflows, Administration, Commit statuses, Secrets or Variables.
 - Subscribe to no webhooks, and untick Active.
-- After creating it, generate a private key and install the App on this repo only.
+- After creating it, generate a private key and install the App on this repo only: on the App's page, Install App, pick the organization, then "Only select repositories" and this repo. Installing on an organization's repo needs an organization owner; if you are not one, GitHub sends them a request to approve (**To verify**).
 
 That list is the most the App can do. No sandbox gets all of it. For each sandbox, a helper on the Mac mints a one-hour token with a subset of the App's permissions. The subset is fixed per stage in `tools/agentctl/profiles.py`:
 
@@ -59,7 +60,7 @@ These belong to your own subscriptions. Create them as **environment secrets** o
 | Type | Name | Source | When it is needed |
 |---|---|---|---|
 | Environment secret | `DISPATCH_TOKEN` | Section 2 | When Codex is started by a comment |
-| Environment secret | `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token` on your machine | Claude review |
+| Environment secret | `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token` on your machine. This needs Claude Code installed on the Mac itself, logged in to your subscription; install it as its documentation describes (code.claude.com/docs). It is used here only to create this token, never to run an agent on the host | Claude review |
 | Environment secret | `CLAUDE_TRIGGER_URL`, `CLAUDE_TRIGGER_TOKEN` | The scheduled task created in section 5 | Claude cloud sessions |
 
 `CLAUDE_CODE_OAUTH_TOKEN` is the only credential you create for the Claude review. On GitHub, the review job uses the token that Actions gives the job.

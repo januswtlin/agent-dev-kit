@@ -61,10 +61,22 @@ cd REPO && gh repo create OWNER/REPO --private && git remote set-url origin http
 git branch -M main && git push -u origin main
 ```
 
+   The clone still remembers the template's default branch as this repo's default. The host scripts compare your checkout with the default branch, so correct that record now, or `sandbox/sbx.sh setup` will later refuse a clean checkout:
+
+```bash
+git remote set-head origin -a
+```
+
 Either way, go into the clone and confirm it is the template and not an empty repo. Every later command is run from there:
 
 ```bash
 cd ~/dev/REPO && ls AGENTS.md policy/roles.toml sandbox/sbx.sh
+```
+
+Confirm that the clone knows `main` as the default branch. This must print `origin/main`; if it prints anything else, or an error, run `git remote set-head origin -a` and try again:
+
+```bash
+git symbolic-ref --short refs/remotes/origin/HEAD
 ```
 
 Fill in who is on the project. The first login is the director, who approves product decisions. Every login given can approve a T2 change. One person is enough:
@@ -109,7 +121,7 @@ The conductor opens and merges pull requests, comments on and labels issues, dis
 - Subscribe to no webhooks, and untick Active.
 - After creating it, generate a private key and install the App on this repo. Note the App's numeric ID. Keep the downloaded key file outside the project directory: a sandbox can read every file in that directory, including ignored ones.
 
-Next, create the GitHub environment that holds the pipeline's secrets. Do this before you set `CONDUCTOR_APP_ID`: the conductor's job is skipped while that variable is empty, and it should not run before the environment is restricted.
+Next, create the GitHub environment that holds the pipeline's secrets. The repository variable `CONDUCTOR_APP_ID` is what switches the conductor on: its job is skipped while that variable is empty. You set it at the end of section 5, after the environment is restricted and the rulesets are in place, not now.
 
 1. In the repo's Settings > Environments, create an environment named exactly `conductor`.
 2. Under Deployment branches and tags, choose Selected branches and tags and add one rule that allows the default branch (`main`) only.
@@ -121,18 +133,12 @@ gh secret set CONDUCTOR_APP_PRIVATE_KEY --env conductor < PATH_TO_PRIVATE_KEY.pe
 
 Why an environment and not a repository secret: the jobs that hold credentials (`reconcile` in `conductor.yml`, `brief` in `brief.yml`, `claude` in `agent-review.yml`) declare `environment: conductor`. A run started from any other ref, a manual dispatch of a branch included, is refused the secrets by GitHub itself. A repository secret has no such rule. **To verify**: that environments with deployment branch rules are available for private repos on the Team plan, the exact names of these settings, and that GitHub does not create the environment without a branch rule if a workflow names it first.
 
-Last, in the repo's Settings > Secrets and variables > Actions > Variables, add the repository variable, or run:
+Keep the App's numeric ID at hand. Section 5 needs it twice: for the rulesets, and to switch the conductor on.
 
-```bash
-gh variable set CONDUCTOR_APP_ID --body APP_ID
-```
-
-From this moment the conductor runs on GitHub Actions. It has nothing to dispatch yet: the template's sprint file (`docs/sprints/000.toml`) lists no stories. It does open a pull request for any branch pushed under `story/`, `spec/`, `sprint/` or `chore/`. Do not merge a sprint file that lists stories until section 5 is done and one person has finished [new-machine.md](new-machine.md).
-
-| Type | Name | Where | Value |
-|---|---|---|---|
-| Environment secret | `CONDUCTOR_APP_PRIVATE_KEY` | Environment `conductor` | The full contents of the private key |
-| Repository variable | `CONDUCTOR_APP_ID` | Settings > Secrets and variables > Actions > Variables | The App's numeric ID |
+| Type | Name | Where | Value | When |
+|---|---|---|---|---|
+| Environment secret | `CONDUCTOR_APP_PRIVATE_KEY` | Environment `conductor` | The full contents of the private key | Now |
+| Repository variable | `CONDUCTOR_APP_ID` | Settings > Secrets and variables > Actions > Variables | The App's numeric ID | At the end of section 5 |
 
 ### Humans
 
@@ -178,7 +184,15 @@ Confirm:
 gh api repos/OWNER/REPO/rulesets --jq '.[].name'
 ```
 
-It should list `main`, `main-merge` and `release-tags`. **To verify**: whether the current API accepts the fields in `.github/rulesets/*.json`; that `main` and `main-merge` layer as described (the bypass in `main-merge` does not weaken `main`); that the App's ID is the right `actor_id` for an Integration bypass; and that `integration_id: 15368` in `main.json` is the GitHub Actions app that produces the required checks. If the API reports unknown fields, adjust them according to the error message and write the result back.
+Now, with the protections in place, switch the conductor on. In the repo's Settings > Secrets and variables > Actions > Variables, add the repository variable `CONDUCTOR_APP_ID`, or run:
+
+```bash
+gh variable set CONDUCTOR_APP_ID --body APP_ID
+```
+
+From this moment the conductor runs on GitHub Actions. No story is dispatched yet: the template's sprint file (`docs/sprints/000.toml`) lists none. Two things do happen from now on. It opens a pull request for any branch pushed under `story/`, `spec/`, `sprint/` or `chore/`. And if `docs/product/roadmap.md` on `main` has unchecked lines, it dispatches the product owner to draft specs for them; the template's roadmap has none, so leave it that way until one person has finished [new-machine.md](new-machine.md). Do not merge a sprint file that lists stories before then either.
+
+The ruleset listing above should show `main`, `main-merge` and `release-tags`. **To verify**: whether the current API accepts the fields in `.github/rulesets/*.json`; that `main` and `main-merge` layer as described (the bypass in `main-merge` does not weaken `main`); that the App's ID is the right `actor_id` for an Integration bypass; and that `integration_id: 15368` in `main.json` is the GitHub Actions app that produces the required checks. If the API reports unknown fields, adjust them according to the error message and write the result back.
 
 ## 6. Set up the first person
 
@@ -282,6 +296,8 @@ Also note these numbers and fill them into the table in section 6 of the guideli
 ## 8. Red-team
 
 Run every item in [redteam-project.md](redteam-project.md). If an item does not give its expected result, fix that first.
+
+Several items in its section F use the local conductor (`bin/agentctl conductor here`). Set that up before you start: it needs the Conductor App's private key on your Mac and the settings file `conductor.env`, both described at the start of section 1 of [operations.md](operations.md).
 
 ## 9. The first real sprint
 
