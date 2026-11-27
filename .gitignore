@@ -1,0 +1,9 @@
+reports/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+review-verdict.json
+review-findings.md
+.claude/settings.local.json
