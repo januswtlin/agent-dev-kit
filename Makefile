@@ -24,7 +24,13 @@ lint: project-lint
 	@bin/agentctl spec-lint
 	@bin/agentctl docs-lint
 
-test: tools-test project-test
+# Both always run: a failure in the tooling's own tests must not keep the project's
+# tests from running and writing their report, which the gates need either way.
+test:
+	@status=0; \
+	$(MAKE) --no-print-directory tools-test || status=1; \
+	$(MAKE) --no-print-directory project-test || status=1; \
+	exit $$status
 
 build: project-build
 
