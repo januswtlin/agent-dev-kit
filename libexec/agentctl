@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# The `agentctl` launcher installed by install.sh. It runs the kit version that the
+# current project pins in agentdev.toml ([kit] version), read from the project's
+# DEFAULT BRANCH as last fetched, never from the working tree: a branch, an
+# agent's included, cannot choose which code runs on this Mac.
+#
+# AGENTDEV_KIT_VERSION=<sha> overrides the pin, for example outside a project or
+# while adopting the kit, before the pin is on the default branch.
+set -euo pipefail
+
+die() { echo "agentctl: $*" >&2; exit 1; }
+data="${AGENTDEV_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-dev-kit}"
+version="${AGENTDEV_KIT_VERSION:-}"
+
+if [ -z "$version" ]; then
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" \
+    || die "not inside a git repository. Run it in a project, or set AGENTDEV_KIT_VERSION=<sha>."
+  default="$(git -C "$root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
+  toml="$(git -C "$root" show "$default:agentdev.toml" 2>/dev/null)" \
+    || die "$default has no agentdev.toml. Set AGENTDEV_KIT_VERSION=<sha> until it does."
+  version="$(printf '%s' "$toml" | python3 -I -c 'import sys, tomllib
+print(tomllib.loads(sys.stdin.read()).get("kit", {}).get("version", ""))')" \
+    || die "cannot read agentdev.toml on $default"
+  [ -n "$version" ] || die "agentdev.toml on $default has no [kit] version."
+fi
+[[ "$version" =~ ^[0-9a-f]{40}$ ]] || die "the kit version must be a full 40-character commit SHA, not '$version'"
+dir="$data/versions/$version"
+[ -f "$dir/tools/run.py" ] || die "kit $version is not installed. In a clone of the kit: ./install.sh $version"
+exec python3 -I "$dir/tools/run.py" "$@"

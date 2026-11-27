@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Agent sandboxes with Docker Sandboxes (sbx). Run on the Mac, from the project directory.
+# Agent sandboxes with Docker Sandboxes (sbx). Part of the installed kit: run it on
+# the Mac from inside a project, or with AGENT_PROJECT_DIR set to one.
 #
 #   sandbox/sbx.sh setup              one-time: lock down sbx and install the token helpers
 #   sandbox/sbx.sh job HARNESS STORY STAGE PROMPT
@@ -28,8 +29,9 @@
 #     (tools/agentctl/profiles.py)
 #
 # Nothing from the project directory is executed on the host by this script: the
-# tooling it runs is a copy pinned outside the repository, started with an
-# isolated Python (-I) so the current directory cannot shadow it.
+# tooling it runs is the installed kit this script belongs to, started with an
+# isolated Python (-I) so the current directory cannot shadow it. What it reads
+# from the project (agentdev.toml) comes from the default branch.
 #
 # Before `setup`, put your agent App's id and private key on the HOST:
 #   ~/.config/agent-app/app-id      (one line: the App ID)
@@ -40,34 +42,20 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# AGENT_PROJECT_DIR: the repository to clone, when this script is run from another
-# checkout of it (the local conductor runs the copy on the default branch).
-project="$(cd "${AGENT_PROJECT_DIR:-$here/..}" && pwd)"
+kit="$(cd "$here/.." && pwd)"
+die() { echo "$*" >&2; exit 1; }
+# AGENT_PROJECT_DIR: the repository to clone (the conductor sets it). Otherwise the
+# repository the current directory is in.
+project="$(cd "${AGENT_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}" && pwd)"
+[ "$project" != "$kit" ] || die "Run this from a project, not from the kit itself."
 conf="${AGENT_APP_DIR:-$HOME/.config/agent-app}"
 
-die() { echo "$*" >&2; exit 1; }
 need_sbx() { command -v sbx >/dev/null || die "sbx not found. Install Docker Sandboxes: https://docs.docker.com/ai/sandboxes/"; }
 
 case "$project" in
   "$HOME/Documents"*|"$HOME/Desktop"*|"$HOME/Library"*)
     die "Refusing: $project is inside a folder that may be synced or private. Move the project to ~/dev." ;;
 esac
-
-# This script runs on the Mac with your permissions. If you have an agent's branch
-# checked out, the copy of it you are running is the agent's. So it only runs when
-# the files that make up the host side are identical to the default branch.
-trusted_checkout() {
-  local root default
-  root="$(cd "$here/.." && pwd)"
-  default="$(git -C "$root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
-  if ! git -C "$root" diff --quiet "$default" -- sandbox tools bin policy 2>/dev/null \
-     || [ -n "$(git -C "$root" ls-files --others --exclude-standard -- sandbox tools bin 2>/dev/null)" ]; then
-    [ "${AGENT_ALLOW_MODIFIED_SCRIPTS:-0}" = "1" ] && return 0
-    die "sandbox/, tools/, bin/ or policy/ in $root differ from $default.
-Run this from a clean checkout of the default branch, not from a branch under review.
-(To develop these scripts themselves: AGENT_ALLOW_MODIFIED_SCRIPTS=1)"
-  fi
-}
 
 # owner-name of the origin remote: two clones of different repositories never share state.
 origin="$(git -C "$project" config --get remote.origin.url)" || die "$project has no origin remote."
@@ -83,16 +71,28 @@ helper_dir="${XDG_DATA_HOME:-$HOME/.local/share}/agent-dev/$slug"
 helper="$helper_dir/github-token"   # followed by -write or -read
 log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dev/$slug"
 
-# The pinned tooling, isolated from the current directory and from PYTHONPATH.
-agentctl() { python3 -I "$helper_dir/run.py" "$@"; }
+# The kit's own tooling, isolated from the current directory and from PYTHONPATH.
+agentctl() { python3 -I "$kit/tools/run.py" "$@"; }
+
+# agentctl with the project's agentdev.toml as it is on the default branch, never
+# the working tree's: what a sandbox is told not to edit is not up to a branch.
+agentctl_trusted() {
+  local cfg default rc=0
+  cfg="$(mktemp -d)"
+  default="$(git -C "$project" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
+  git -C "$project" show "$default:agentdev.toml" > "$cfg/agentdev.toml" 2>/dev/null || : > "$cfg/agentdev.toml"
+  (cd "$project" && AGENTCTL_TRUSTED_ROOT="$cfg" agentctl "$@") || rc=$?
+  rm -rf "$cfg"
+  return "$rc"
+}
 
 valid_harness() { case "$1" in claude|codex|ollama) ;; *) die "unknown harness: $1" ;; esac; }
 valid_stage() { [[ "$1" =~ ^[a-z][a-z-]{1,30}$ ]] || die "not a stage name: $1"; }
-valid_story() { [[ "$1" =~ ^([0-9]{3}|sprint)$ ]] || die "not a story id: $1"; }
+valid_story() { [[ "$1" =~ ^([0-9]{2,6}|sprint)$ ]] || die "not a story id: $1"; }
 valid_name() { [ "${#1}" -le 63 ] || die "sandbox name too long (${#1} > 63 characters): $1"; }
 
 # Two repositories whose owner-name collide ("a-b/c" and "a/b-c") would share the
-# pinned tooling and the token helpers. The directory records whose it is.
+# token helpers. The directory records whose it is.
 same_repository() {
   [ ! -e "$helper_dir/origin" ] || [ "$(cat "$helper_dir/origin")" = "$full" ] \
     || die "$helper_dir belongs to $(cat "$helper_dir/origin"), not to $full. Their names collide; set XDG_DATA_HOME to keep them apart."
@@ -161,11 +161,6 @@ install_helper() {
   mkdir -p "$helper_dir"
   same_repository
   printf '%s\n' "$full" > "$helper_dir/origin"
-  rm -rf "$helper_dir/agentctl" "$helper_dir/run.py"
-  # Copy the tooling from the default branch, not from the working tree.
-  git -C "$project" fetch --quiet origin
-  default="$(git -C "$project" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
-  git -C "$project" archive "$default" tools/agentctl tools/run.py | tar -x -C "$helper_dir" --strip-components=1
   repo="$(agentctl repo-name "$origin")"
   [ -n "$repo" ] || die "origin is not a GitHub repository: $origin"
   # One helper per permission set. A sandbox is pointed at exactly one of them.
@@ -176,11 +171,11 @@ install_helper() {
 set -euo pipefail
 cd /
 export AGENT_APP_ID="\$(cat "$conf/app-id")" AGENT_APP_KEY="$conf/key.pem"
-exec python3 -I "$helper_dir/run.py" app-token --repo "$repo" --profile $scope
+exec python3 -I "$kit/tools/run.py" app-token --repo "$repo" --profile $scope
 EOF
     chmod 700 "$helper-$scope"
   done
-  echo "token helpers installed in $helper_dir (tooling from $default, repository $repo)"
+  echo "token helpers installed in $helper_dir (kit $kit, repository $repo)"
 }
 
 allow_hosts() {  # allow_hosts FILE [sbx policy options...]
@@ -196,8 +191,8 @@ create() {  # create NAME HARNESS STAGE
   same_repository
   valid_name "$1"
   no_secrets_in_tree
-  # What this stage may hold comes from the pinned copy of the tooling, not from the
-  # checked-out branch: token scope, network, settings.
+  # What this stage may hold comes from the installed kit, not from the project:
+  # token scope, network, settings.
   read -r scope network settings < <(agentctl stage-profile "$3")
   # Never reuse a sandbox: one left over from another stage would keep that stage's rules.
   if sbx ls 2>/dev/null | grep -qw -- "$1"; then
@@ -212,8 +207,12 @@ create() {  # create NAME HARNESS STAGE
   if [ "$network" = "build" ]; then allow_hosts "$here/allowlist-build.txt" --sandbox "$1"; fi
   # Deny rules for the harness: a second, soft layer under the two above.
   if [ "$2" = "claude" ]; then
+    local rules
+    rules="$(mktemp)"
+    agentctl_trusted harness-settings "$settings" > "$rules"
     sbx exec "$1" -- mkdir -p /home/agent/.claude
-    sbx cp "$here/$settings-agent.claude-settings.json" "$1:/home/agent/.claude/settings.json"
+    sbx cp "$rules" "$1:/home/agent/.claude/settings.json"
+    rm -f "$rules"
   fi
   verify_network "$1" "$network"
   echo "sandbox $1: stage=$3 token=$scope network=$network settings=$settings"
@@ -222,7 +221,6 @@ create() {  # create NAME HARNESS STAGE
 case "${1:-}" in
   setup)
     need_sbx
-    trusted_checkout
     no_secrets_in_tree
     sbx settings set ssh.agentForwardingEnabled false
     sbx settings set skills.defaultMode off
@@ -251,7 +249,6 @@ That removes ALL your existing sbx network rules and starts from deny-all."
     need_sbx
     harness="${2:?usage: sbx.sh job HARNESS STORY STAGE PROMPT}"; story="${3:?story id}"; stage="${4:?stage}"; prompt="${5:?prompt}"
     valid_harness "$harness"; valid_story "$story"; valid_stage "$stage"
-    trusted_checkout
     # Unique per invocation: the second in hex, plus a random byte for two jobs
     # started within the same second.
     stamp="$(printf '%x%02x' "$(date +%s)" "$((RANDOM % 256))")"

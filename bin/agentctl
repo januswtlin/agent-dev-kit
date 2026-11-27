@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Thin launcher so `bin/agentctl <command>` works from anywhere in the repository.
-# -I keeps the current directory and PYTHONPATH off the import path (see tools/run.py).
+# Runs the tools of THIS checkout of the kit: for developing the kit itself.
+# Projects use the launcher that install.sh puts in ~/.local/bin, which runs the
+# installed version the project pins. -I keeps the current directory and
+# PYTHONPATH off the import path (see tools/run.py).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 exec python3 -I "$root/tools/run.py" "$@"

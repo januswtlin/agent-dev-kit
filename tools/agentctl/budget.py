@@ -12,8 +12,7 @@ request's code must not be the one that decides whether it passes.
 
 Overflow is OFF by default. Those two jobs run pull request code, so the runner
 they overflow to must hold nothing worth stealing and must be thrown away after
-each job. The Lima VM that ships here is neither: it is long-lived, has
-passwordless sudo, and holds an agent's logins. Point `overflow_runner` only at a
+each job. A developer's Mac, or any VM an agent works in, is neither. Point `overflow_runner` only at a
 dedicated, credential-free, ephemeral runner.
 
 The figure is an estimate. GitHub's billing page is the source of truth.

@@ -3,6 +3,12 @@
 # replaces the default as a whole. Read by `agentctl` from the kit itself, so a
 # project cannot change what its own file leaves out.
 
+[kit]
+# The kit version this project uses: a full commit SHA of the kit repository.
+# The installed `agentctl` launcher runs this version, read from the default
+# branch; the caller workflows in .github/workflows must use the same SHA.
+version = ""
+
 [paths]
 specs = "docs/specs"
 sprints = "docs/sprints"

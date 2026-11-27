@@ -400,6 +400,12 @@ def cmd_harness_settings(args) -> int:
     return 0
 
 
+def cmd_sandbox(args) -> int:
+    """Run the kit's sandbox/sbx.sh (setup, job) for the project in the current directory."""
+    from .github import KIT_ROOT
+    os.execv("/bin/bash", ["bash", str(KIT_ROOT / "sandbox" / "sbx.sh"), *args.args])
+
+
 def cmd_doctor(args) -> int:
     results = doctor.inside_checks() if args.inside else doctor.host_checks(_root())
     return doctor.report(results)
@@ -492,6 +498,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("harness-settings", help="print the Claude Code deny rules for a stage's sandbox")
     p.add_argument("kind", choices=["story", "spec"])
     p.set_defaults(func=cmd_harness_settings)
+
+    p = sub.add_parser("sandbox", help="run the kit's sandbox script: setup, or job HARNESS STORY STAGE PROMPT")
+    p.add_argument("args", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_sandbox)
 
     p = sub.add_parser("doctor", help="check host hygiene, or the sandbox boundary with --inside")
     p.add_argument("--inside", action="store_true")

@@ -53,9 +53,9 @@ def host_checks(project: Path) -> list[tuple[str, str, str]]:
     else:
         results.append(("platform", WARN, f"host checks are written for macOS; running on {platform.system()}"))
 
-    sandbox = shutil.which("sbx") or shutil.which("limactl")
+    sandbox = shutil.which("sbx")
     results.append(("sandbox runtime", OK if sandbox else FAIL,
-                    f"found {sandbox}" if sandbox else "neither sbx (Docker Sandboxes) nor limactl (Lima) is installed"))
+                    f"found {sandbox}" if sandbox else "sbx (Docker Sandboxes) is not installed"))
 
     for name in ("claude", "codex"):
         path = shutil.which(name)
