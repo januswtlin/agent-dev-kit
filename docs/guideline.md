@@ -35,13 +35,14 @@ It assumes nothing fixed about the team. One person with one AI subscription is 
 
 The sandbox built into a harness is not enough to protect privacy. Claude Code's sandbox allows reading almost the whole file system by default, and it covers only Bash, not the file tools, MCP servers or hooks. Codex's `workspace-write` likewise restricts only writes. They work against accidental deletion, but protection against reading depends on you listing every path correctly. A VM's mounts are deny by default: what is not mounted does not exist.
 
-Three properties of the local sandbox (`sandbox/`):
+The local sandbox is Docker Sandboxes (`sandbox/sbx.sh`). Four properties:
 
-- A VM with its own kernel, mounting only the project's worktree.
-- Outbound connections are limited to `sandbox/allowlist.txt`. This limits both data exfiltration after a prompt injection and callbacks from malicious packages.
-- Inside the VM there is only the agent's GitHub token (see "Identities and tokens" below). No SSH keys, no cloud credentials.
+- One microVM per agent, with its own kernel.
+- **Clone mode.** The repository is mounted read-only and the agent works on a private clone inside the VM. Nothing it does changes a file on the Mac, and its only way to deliver work is `git push`. This matters more than it looks. With an ordinary read-write mount, an agent can write a git hook into `.git/hooks`, and that hook then runs on the Mac, as you, the next time you use git in that directory.
+- Outbound connections are denied except to the hosts in `sandbox/allowlist.txt`, filtered by host name. This limits both data exfiltration after a prompt injection and callbacks from malicious packages.
+- No GitHub credential inside the VM. A proxy on the host replaces a placeholder with a one-hour token of your agent GitHub App, which a helper on the host mints when it is needed. The App's private key never leaves the host. SSH agent forwarding is turned off, because it is on by default and would let the agent push as you.
 
-Two implementations: Docker Sandboxes (`sbx`, one microVM per agent, connections filtered by host name) and Lima (`sandbox/vm.sh`, filtered by address, which is looser). The repo ships the Lima scripts because Lima's configuration format is stable and can be written out in full. `sbx` isolates more strictly, and switching to it is recommended once its behaviour has been confirmed. Neither has been verified on a real machine yet; see section 9.
+Lima (`sandbox/vm.sh`) remains as a fallback and as the home of the self-hosted runner. It is weaker on three counts: the workspace is mounted read-write, traffic is filtered by address rather than by host name, and the App's key has to live inside the VM. Neither has been run on a real machine yet; see section 9.
 
 Cloud sessions (Claude Code on the web, Codex cloud) are vendor-managed VMs that cannot reach your laptop at all. They are the strongest isolation for privacy, and the only place where work can continue while the laptop is closed. Set the environment's network to restricted and put no secrets in it.
 
@@ -77,7 +78,7 @@ Three identities, with separate permissions:
 | Agent | A GitHub App per developer, for that developer's agents | Push branches, comment, change labels | Open PRs, approve, merge, change workflows, create tags, write commit statuses |
 | Conductor | One GitHub App for the pipeline | Open PRs, enable auto-merge, dispatch work, notify | Approve PRs |
 
-Why each developer's agents get their own GitHub App: an App has exactly the permissions it was granted, whatever its owner's role, so it carries no admin bypass. Its tokens expire after an hour. It takes no seat. And because there is one per developer, a commit or a comment shows whose agent made it; a single App shared by everyone would hide that. A personal access token cannot do the same: a token issued from an admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. `agentctl app-token` mints the token inside the VM.
+Why each developer's agents get their own GitHub App: an App has exactly the permissions it was granted, whatever its owner's role, so it carries no admin bypass. Its tokens expire after an hour. It takes no seat. And because there is one per developer, a commit or a comment shows whose agent made it; a single App shared by everyone would hide that. A personal access token cannot do the same: a token issued from an admin account, even a fine-grained one, still inherits the admin's eligibility to bypass rulesets. `agentctl app-token` mints the token, and it runs on the host: the sandbox's proxy calls it and injects the result, so neither the key nor the token is inside the VM.
 
 Why the conductor is a separate GitHub App: GitHub does not let an author approve their own PR. If a cloud agent opened a spec PR under your identity, you could not approve it. So the agent only pushes a branch, and the Conductor App opens the PR. In addition, PRs opened and merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so the gates would not run at all.
 
@@ -261,9 +262,10 @@ Only `ci` and `security` move over, because they are the heavy jobs that run the
 | Claude Code cloud session | The conductor calls a scheduled task's API trigger | No |
 | Codex cloud | The conductor leaves an `@codex` comment on the PR or issue | No |
 | Claude review | The `agent-review` workflow job | No |
-| Self-hosted runner inside the VM | The conductor starts the `agent-job` workflow, and the runner picks it up when it comes online | Yes |
+| Local Docker Sandbox, clone mode | The conductor running on your Mac starts it directly | Yes |
+| Self-hosted runner in the Lima VM | The conductor starts the `agent-job` workflow, and the runner picks it up when it comes online | Yes |
 
-The first three are the main workforce. The fourth is extra capacity and a backup, and Ollama tasks can only go through it. Which cloud path actually works has to be confirmed by the spike. For one that does not, change it to `via = "workflow"` in `policy/roles.toml`.
+The first three are the main workforce. The last two are extra capacity and a fallback, and need the Mac to be on; Ollama tasks can only use them. A stage assigned to a local sandbox while the conductor is on GitHub Actions simply waits until the conductor runs on the Mac again. Which cloud path actually works has to be confirmed by the spike. For one that does not, change it to `via = "sbx"` in `policy/roles.toml`.
 
 ## 7. Your day to day
 
@@ -291,7 +293,7 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 
 **Verified during development:**
 
-- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 87 unit tests in total.
+- `agentctl`'s risk tiering, bilingual spec and document checks, traceability, red-green judgement, conductor scheduling logic, budget estimate and lease judgement: 90 unit tests in total.
 - Red-green was run end to end on a real git repo, split into two steps, collect and judge: an empty test was blocked, and passed after being changed into a real test. When the collect step was not run, the judgement was fail rather than pass.
 - The conductor's GitHub interface layer was run against a simulated `gh`: dispatching, leaving markers, marking a draft ready for review, a single failed action not affecting the others. While the lease is valid the Actions side does not act, and it takes over when the lease expires. When usage reaches the threshold it rewrites `CI_RUNNER`.
 - The workflows pass actionlint, the shell scripts pass shellcheck, and the command-blocking hook has tests.
@@ -303,7 +305,8 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 - What a cloud session connected to a personal admin account can do on GitHub (section E of the red-team checklist).
 - Minting an agent App token against the real API (`agentctl app-token`).
 - The current input parameters of `anthropics/claude-code-action`; the account name of the Codex review bot and its review format.
-- The Lima configuration and egress rules under `sandbox/`; the commands and behaviour of `sbx`.
+- Docker Sandboxes on a real Mac: the `sbx` commands used by `sandbox/sbx.sh`, clone mode, whether the proxy injects the App token into `git push` over HTTPS (the documentation does not spell this out), the home directory path inside the sandbox, and headless runs of each harness.
+- The Lima configuration and egress rules under `sandbox/`.
 - Whether the sandbox and permission syntax in `.claude/settings.json` matches the current version.
 - The actual label of the 1-core runner; the permissions needed for `workflow_run` to trigger the conductor and for downloading artifacts across workflows; the Conductor App's permission to write repo variables.
 - How required checks that were skipped on a draft PR behave after it is marked ready for review.
@@ -314,9 +317,11 @@ The credibility of auto-merge is capped by the quality of the tests. That is the
 ## 10. Known limitations
 
 - The two developers themselves are trusted. The design defends against agents going out of control and against prompt injection, not against insiders.
-- The worktree inside the VM is writable, and an agent can destroy it. Pushed content is protected by GitHub; unpushed work may be lost.
+- In clone mode the agent's work exists only inside the VM until it pushes. A stage that ends without pushing leaves nothing behind except its log.
+- In the Lima fallback, and in sbx's direct mode, the workspace is mounted read-write. The agent can then destroy the working tree and can plant a git hook that later runs on the Mac. That is why clone mode is the default.
+- Docker Sandboxes is at version 0.x. Its commands may change.
 - The subscription login state inside the VM could in theory be stolen by malicious repo content. The egress allowlist reduces this risk but does not remove it.
-- Lima's egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
+- In the Lima fallback, egress rules filter by address, so other hosts that share an address with an allowed host are also reachable.
 - Cloud sessions act as the personal account you connect. Until section E of the red-team checklist has been run, assume a cloud agent can do on GitHub whatever that account can, limited only by rulesets that have no bypass. The release tag ruleset lets admins bypass, so it is one of the things to test.
 - What you paste into the PO chat or an issue enters the vendor's context and is outside the isolation.
 - There is no hard guarantee that the two language versions of a story mean the same thing. If the Chinese you approved and the English the agents implement differ, only the review agent and you yourself can catch it.

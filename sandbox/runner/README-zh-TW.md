@@ -5,7 +5,7 @@
 補充產能與備援。Mac 開著時，VM 裡的 runner 會自動領取 conductor 排進 GitHub 的
 `agent-job`，不需要人下指令。Ollama 的任務只能走這條路。
 
-雲端 session 仍是主力，因為筆電闔上時它們照常運作。
+雲端 session 仍是主力，因為筆電闔上時它們照常運作。在 Mac 上，主要路徑是由本機 conductor 啟動的 Docker Sandbox（`sandbox/sbx.sh`）；這個 runner 位於 Lima 備援 VM 內，是兩者中較弱的一個。
 
 這個 runner 還有第二個用途：當月 Actions 額度接近用完時，`agentctl budget` 會把 `ci` 與 `security` 這兩個執行 PR 程式碼的重型 job 改派到這裡。負責判定的 job 不會過來。
 

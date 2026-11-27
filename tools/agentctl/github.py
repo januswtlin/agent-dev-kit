@@ -224,6 +224,10 @@ def _prompt(action: Action, context: dict) -> str:
     return "\n".join(lines)
 
 
+class Deferred(Exception):
+    """This action cannot be carried out from here; another conductor run will do it."""
+
+
 def developer_key(login: str) -> str:
     """A GitHub login as it appears in secret names and runner labels: ALICE_SMITH."""
     return re.sub(r"[^A-Za-z0-9]", "_", login or "").upper()
@@ -264,6 +268,14 @@ def _send(action: Action, context: dict, roles: dict) -> None:
             raise SystemExit(f"story {action.story} has no open pull request to review")
         gh("workflow", "run", harness["review_workflow"], "-f", f"pr={pr[0]['number']}", "-f", f"story={action.story}",
            "-f", f"developer={developer_key(developer)}")
+    elif via == "sbx":
+        # A clone-mode Docker Sandbox on this Mac. Only the local conductor can start
+        # one; on GitHub Actions the stage waits until a conductor runs here again.
+        if os.environ.get("GITHUB_ACTIONS"):
+            raise Deferred(f"harness '{action.harness}' runs in a local sandbox; waiting for `agentctl conductor here`")
+        script = Path(os.environ.get("AGENTCTL_PROJECT_DIR") or ".") / "sandbox" / "sbx.sh"
+        subprocess.Popen([str(script), "job", action.harness, action.story or "sprint", prompt],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     elif via == "workflow":
         # GitHub-hosted (claude-code-action) or self-hosted runner in the sandbox VM.
         gh("workflow", "run", "agent-job.yml", "-f", f"story={action.story}", "-f", f"stage={action.stage}",
@@ -304,6 +316,8 @@ def execute(actions: list[Action], context: dict, roles: dict, dry_run: bool = F
             continue
         try:
             _execute_one(action, context, roles)
+        except Deferred as exc:
+            print(f"  deferred: {exc}")
         except (subprocess.CalledProcessError, OSError, KeyError, SystemExit) as exc:
             failures += 1
             detail = (getattr(exc, "stderr", "") or str(exc)).strip().splitlines()[-1:] or [type(exc).__name__]

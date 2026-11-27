@@ -88,3 +88,39 @@ class TemplateNeutralityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SandboxCheckTests(unittest.TestCase):
+    def test_placeholders_are_not_mistaken_for_real_tokens(self):
+        from agentctl import doctor
+        for real in ("ghp_abc", "ghs_abc", "github_pat_abc", "gho_abc"):
+            self.assertTrue(doctor.looks_like_real_github_token(real), real)
+        for fake in ("proxy-managed", "sbx-cs-123", "", None):
+            self.assertFalse(doctor.looks_like_real_github_token(fake), fake)
+
+    def test_a_path_down_to_the_project_is_fine_but_private_folders_are_not(self):
+        from agentctl import doctor
+        with tempfile.TemporaryDirectory() as tmp:
+            users = Path(tmp) / "Users"
+            (users / "alice" / "dev" / "project").mkdir(parents=True)
+            self.assertEqual(doctor.private_host_paths(users), [])
+            (users / "alice" / "Documents").mkdir()
+            (users / "alice" / ".ssh").mkdir()
+            self.assertEqual(sorted(Path(p).name for p in doctor.private_host_paths(users)), [".ssh", "Documents"])
+            self.assertEqual(doctor.private_host_paths(Path(tmp) / "missing"), [])
+
+    def test_local_sandbox_stages_wait_when_the_conductor_is_on_actions(self):
+        from agentctl.reconcile import Action
+        saved = dict(os.environ)
+        os.environ["GITHUB_ACTIONS"] = "true"
+        try:
+            roles = {"harness": {"ollama": {"via": "sbx"}}}
+            context = {"issues": {"001": 2}, "sprint_issue": 1, "sprint": "001", "specs": {}, "prs": {}, "assignees": {}}
+            action = Action("dispatch", story="001", stage="impl", harness="ollama", attempt=1)
+            with self.assertRaises(github.Deferred):
+                github._send(action, context, roles)
+            # Deferred is not a failure: the run stays green and no marker is written.
+            self.assertEqual(github.execute([action], context, roles), 0)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)

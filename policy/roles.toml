@@ -24,13 +24,16 @@ planner = "claude"
 # --- How each harness is started -----------------------------------------------------
 # via = "http"     POST to a cloud scheduled task's API trigger (laptop can be closed)
 # via = "comment"  post a mention that starts a cloud task (laptop can be closed)
+# via = "sbx"      start a clone-mode Docker Sandbox on the developer's Mac. Needs
+#                  `agentctl conductor here` running on that Mac; while the
+#                  conductor is on GitHub Actions these stages simply wait
 # via = "workflow" run .github/workflows/agent-job.yml on the developer's self-hosted
-#                  runner inside their sandbox VM (machine must be on)
+#                  runner inside their Lima VM (machine must be on)
 #
 # Credentials are per developer: the conductor looks for NAME_<LOGIN> first (login
 # in upper case, other characters as "_"), then NAME.
 # Which cloud paths work with your accounts is settled by the spike in
-# docs/runbook.md. Switch a harness to via = "workflow" if its cloud path does not.
+# docs/runbook.md. Switch a harness to via = "sbx" if its cloud path does not.
 
 [harness.claude]
 # Reviews run as a workflow job so the job itself sets the agent-review status.
@@ -45,7 +48,7 @@ mention = "@codex"
 token_env = "DISPATCH_TOKEN"
 
 [harness.ollama]
-via = "workflow"
+via = "sbx"
 
 # --- Developers ----------------------------------------------------------------------
 # One table per person, keyed by GitHub login. `default` covers a story with no

@@ -73,13 +73,48 @@ def _listable(path: Path) -> bool:
         return False
 
 
+PRIVATE_MARKERS = ("Documents", "Desktop", "Downloads", "Library", "Pictures", ".ssh", ".aws")
+REAL_TOKEN_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
+CLONE_SOURCE = Path("/run/sandbox/source")
+
+
+def looks_like_real_github_token(value: str | None) -> bool:
+    """True for an actual GitHub credential, False for a proxy placeholder or nothing."""
+    return bool(value) and value.startswith(REAL_TOKEN_PREFIXES)
+
+
+def private_host_paths(users_root: Path) -> list[str]:
+    """Private folders of a host user that are visible from here.
+
+    A direct mount exposes the path down to the project and nothing else, so the
+    mere existence of /Users/<name> is fine. Seeing Documents or Library is not.
+    """
+    found = []
+    if users_root.exists() and _listable(users_root):
+        for home in users_root.iterdir():
+            for marker in PRIVATE_MARKERS:
+                candidate = home / marker
+                if candidate.exists() and _listable(candidate):
+                    found.append(str(candidate))
+    return found
+
+
 def inside_checks(blocked_url: str = "https://example.com") -> list[tuple[str, str, str]]:
     results = []
-    mac_home = Path("/Users")
-    visible = [str(p) for p in mac_home.iterdir()] if mac_home.exists() and _listable(mac_home) else []
+    visible = private_host_paths(Path("/Users"))
     results.append(("host home", FAIL if visible else OK,
-                    "host home directories are visible: " + ", ".join(visible) if visible
-                    else "no host home directory is mounted"))
+                    "private host folders are visible: " + ", ".join(visible) if visible
+                    else "no private host folder is visible"))
+
+    if CLONE_SOURCE.exists():
+        writable = os.access(CLONE_SOURCE, os.W_OK)
+        results.append(("workspace", FAIL if writable else OK,
+                        f"{CLONE_SOURCE} is writable; clone mode should mount the repository read-only" if writable
+                        else "clone mode: the host repository is read-only, work happens on a private clone"))
+    else:
+        results.append(("workspace", WARN,
+                        "the workspace is mounted from the host and writable: the agent can change files on the "
+                        "Mac, including .git/hooks. Prefer clone mode (sandbox/sbx.sh)"))
 
     secrets = [p for p in (Path.home() / ".ssh", Path.home() / ".aws", Path.home() / ".config/gcloud")
                if p.exists() and any(p.iterdir())]
@@ -87,19 +122,25 @@ def inside_checks(blocked_url: str = "https://example.com") -> list[tuple[str, s
                     "found credential folders: " + ", ".join(map(str, secrets)) if secrets
                     else "no SSH or cloud credential folders present"))
 
+    if os.environ.get("SSH_AUTH_SOCK") and shutil.which("ssh-add"):
+        code, _ = _run(["ssh-add", "-l"])
+        results.append(("ssh agent", FAIL if code == 0 else OK,
+                        "a forwarded SSH agent with keys is reachable: the agent could push as you. "
+                        "Turn off SSH agent forwarding" if code == 0 else "no usable SSH agent"))
+    else:
+        results.append(("ssh agent", OK, "no SSH agent is forwarded"))
+
+    real = [name for name in ("GH_TOKEN", "GITHUB_TOKEN") if looks_like_real_github_token(os.environ.get(name))]
+    results.append(("github token", WARN if real else OK,
+                    f"{', '.join(real)} holds a real GitHub token inside the sandbox; with sbx the proxy should "
+                    "inject it and the sandbox should only see a placeholder" if real
+                    else "no real GitHub token in the environment"))
+
     try:
         urllib.request.urlopen(blocked_url, timeout=8)
         results.append(("egress", FAIL, f"{blocked_url} is reachable; the egress allowlist is not enforced"))
     except (urllib.error.URLError, OSError):
         results.append(("egress", OK, f"{blocked_url} is blocked"))
-
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token and shutil.which("gh"):
-        code, out = _run(["gh", "api", "user/repos", "--jq", "length"])
-        count = out.strip()
-        results.append(("github token", WARN if code == 0 and count not in ("", "0", "1") else OK,
-                        f"token can list {count} repositories; it should be a fine-grained token for this repository only"
-                        if code == 0 and count not in ("", "0", "1") else "token scope looks narrow"))
     return results
 
 

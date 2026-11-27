@@ -45,6 +45,9 @@ Each row is a class of incident that has really happened or can be expected, map
 | 23 | A PR's code leaves something behind on the self-hosted runner that affects later jobs | The jobs that pass judgement always run on GitHub-hosted runners; only `ci` and `security` overflow | The runner is inside the VM |
 | 24 | A maintenance session is induced to weaken the guardrails | Changes to guardrail paths always need human approval to merge | AGENTS.md rule 3: only something a human asks for directly in the session counts as a maintenance request |
 | 25 | The Actions allowance is exhausted and the gates cannot run | When the allowance runs out, PRs cannot be merged; nothing is merged without the gates | Usage estimate, overflow to self-hosted, daily brief |
+| 26 | The agent plants a git hook or edits `.git/config` in a mounted repository, and it runs on the Mac the next time you use git there | Clone mode: the repository is mounted read-only and the agent works on a private clone | `agentctl doctor --inside` warns when the workspace is writable |
+| 27 | The agent uses your forwarded SSH agent to push as you, bypassing its own identity | `sandbox/sbx.sh setup` turns SSH agent forwarding off; outbound SSH is not on the allowlist | `agentctl doctor --inside` fails when an SSH agent with keys is reachable |
+| 28 | The agent's GitHub credential is stolen from inside the sandbox | With sbx neither the key nor the token is in the VM; the proxy on the host injects a one-hour token | In the Lima fallback the key is in the VM; revoke it in the App's settings |
 
 ## Reference incidents
 

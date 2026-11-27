@@ -193,6 +193,8 @@ def cmd_conductor(args) -> int:
         return 0
 
     os.environ.update(lease.load_env_file(repo / ".env.conductor"))
+    # Local sandboxes are started from the working copy's own sandbox/ scripts.
+    os.environ["AGENTCTL_PROJECT_DIR"] = str(repo)
     github.gh("variable", "set", "CONDUCTOR_HOME", "--body", "local")
     print(f"conductor is running here, every {args.interval}s. Ctrl-C hands over to GitHub Actions.")
     try:

@@ -108,7 +108,51 @@ It should list `main` and `release-tags`. **To verify**: whether the current API
 bin/agentctl doctor
 ```
 
-Fix every FAIL. Then create the VM:
+Fix every FAIL. The local sandbox is Docker Sandboxes in clone mode. Install `sbx` as its documentation describes (docs.docker.com/ai/sandboxes), then sign in:
+
+```bash
+sbx login
+```
+
+Put your agent App's ID and private key (section 2.1) on the Mac. They stay on the host, where nothing in a sandbox can read them. Use your App's ID in place of `APP_ID` and the name of the key file you downloaded:
+
+```bash
+mkdir -p ~/.config/agent-app && echo APP_ID > ~/.config/agent-app/app-id
+```
+
+```bash
+mv ~/Downloads/YOUR_APP.private-key.pem ~/.config/agent-app/key.pem && chmod 600 ~/.config/agent-app/key.pem
+```
+
+Then:
+
+```bash
+sandbox/sbx.sh setup
+```
+
+This turns off SSH agent forwarding for sbx (a setting that applies to all your sandboxes), allows the hosts in `sandbox/allowlist.txt`, and installs the token helper outside the repo, from the tooling on the default branch. To let sandboxes reach Ollama on the Mac, run it as `AGENT_OLLAMA=1 sandbox/sbx.sh setup`.
+
+Log in to your harnesses the way the sbx documentation describes for each. At the time of writing that is `sbx secret set openai --oauth` on the host for Codex, and `/login` inside the sandbox for Claude Code (**To verify**).
+
+Start an interactive agent, then check the boundary from a second terminal:
+
+```bash
+sandbox/sbx.sh up claude
+```
+
+```bash
+sandbox/sbx.sh check
+```
+
+The agent works on a private clone and delivers by pushing. To look at its work before it pushes, fetch from the remote that sbx adds to your repo (`REPO` is the directory name):
+
+```bash
+git fetch sandbox-agent-REPO-claude
+```
+
+**To verify** on a real Mac: everything in this section. In particular, confirm that `git push` from inside the sandbox succeeds and is attributed to your agent App, and record the result in the red-team checklist.
+
+Fallback: Lima. Use it if sbx is not available to you, or for the self-hosted runner (`sandbox/runner/README.md`). It is weaker: the workspace is mounted read-write, traffic is filtered by address, and the App's key has to be inside the VM.
 
 ```bash
 brew install lima
@@ -122,27 +166,17 @@ sandbox/vm.sh up
 sandbox/vm.sh check
 ```
 
-Enter the VM, sign in to your harnesses, and set up the agent's GitHub identity:
-
 ```bash
 sandbox/vm.sh shell
 ```
 
-The following run inside the VM:
-
-```bash
-claude
-```
-
-```bash
-codex login
-```
+The following run inside the VM. Sign in to your harnesses (`claude`, `codex login`), then give the VM your agent App's key:
 
 ```bash
 mkdir -p ~/.config/agent-app && cat > ~/.config/agent-app/key.pem && chmod 600 ~/.config/agent-app/key.pem
 ```
 
-Paste the private key of your agent App (section 2.1), then press Ctrl-D. Next, with your App's ID in place of `APP_ID` and your App's name in place of `yourname-agent`:
+Paste the private key, then press Ctrl-D. Next, with your App's ID in place of `APP_ID` and your App's name in place of `yourname-agent`:
 
 ```bash
 echo 'export AGENT_APP_ID=APP_ID AGENT_APP_KEY=$HOME/.config/agent-app/key.pem PATH=/workspace/sandbox/bin:$PATH' >> ~/.profile && . ~/.profile
@@ -152,21 +186,11 @@ echo 'export AGENT_APP_ID=APP_ID AGENT_APP_KEY=$HOME/.config/agent-app/key.pem P
 git config --global credential.https://github.com.helper '!/workspace/bin/agentctl app-token --git-credential' && git config --global user.name "yourname-agent[bot]" && git config --global user.email "yourname-agent[bot]@users.noreply.github.com"
 ```
 
-From now on, git and `gh` inside the VM act as your agent App. `sandbox/bin/gh` wraps `gh` so that every call uses a fresh one-hour token. The key stays in the VM: if the VM were compromised, what leaks is that App's access to this one repo (push branches, comment, label), and deleting the key in the App's settings revokes it.
-
-Copy the `vm` profile from `codex/config.example.toml` into `~/.codex/config.toml` inside the VM.
-
-Install the deny rules meant for story agents as user-level settings inside the VM. These rules forbid editing the guardrail paths and approved specs. They should apply to story agents only, so they are not kept in the repo's shared settings:
-
 ```bash
 mkdir -p ~/.claude && cp /workspace/sandbox/story-agent.claude-settings.json ~/.claude/settings.json
 ```
 
-The cloud environments need the same rules (**To verify**: how each of the two cloud services sets user-level rules).
-
-If you use Docker Sandboxes instead (stricter isolation, recommended): **To verify** its commands. The forms found during research were `sbx run claude`, `sbx run codex` and `sbx policy allow network <domain>`. Once confirmed, add the hosts in `sandbox/allowlist.txt` one by one and run the same checklist.
-
-For installing the self-hosted runner, see `sandbox/runner/README.md`. It is optional. Decide whether to install it after the cloud paths have been confirmed.
+The last command installs the deny rules meant for story agents. Also copy the `vm` profile from `codex/config.example.toml` into `~/.codex/config.toml`. For the cloud environments, apply the same story-agent rules (**To verify**: how each cloud service sets user-level rules).
 
 ## 6. Cloud agents
 
@@ -283,9 +307,9 @@ Running locally needs the trigger URL and token used for dispatching. Create `.e
 
 ## 12. Ollama (do this later)
 
-Ollama is installed on the Mac (it needs the GPU). The VM reaches it through port 11434 on the host gateway, and `sandbox/egress.sh` already allows this port.
+Ollama is installed on the Mac (it needs the GPU). A sandbox reaches it as `host.docker.internal:11434` once `AGENT_OLLAMA=1 sandbox/sbx.sh setup` has allowed that port. In the Lima fallback, `sandbox/egress.sh` already allows it through the host gateway.
 
 - An M2 with 24GB of memory: choose a model in the 14 to 15GB class (for example devstral 24b, gpt-oss 20b). A 19GB-class model with a large context will be very tight. For model names and sizes, go by the Ollama model library of the day.
 - Always raise the context window. The default is very small, and the agent will silently lose the instructions at the start.
 - Position it for T0-type work: documentation, lint fixes, test skeletons. Its output must pass every gate all the same.
-- In `policy/roles.toml`, add `"ollama"` to the stages you want to hand to it. It can only run through the self-hosted runner.
+- In `policy/roles.toml`, add `"ollama"` to the stages you want to hand to it. It runs in a local sandbox, so those stages only start while the conductor is running on your Mac (`agentctl conductor here`).

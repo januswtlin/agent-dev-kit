@@ -35,13 +35,14 @@
 
 Harness 內建的 sandbox 不足以保護隱私。Claude Code 的 sandbox 預設允許讀取幾乎整個檔案系統，而且只涵蓋 Bash，不涵蓋檔案工具、MCP server 與 hooks；Codex 的 `workspace-write` 也只限制寫入。它們防誤刪有效，防讀取則要靠你把每個路徑都列對。VM 的掛載是預設拒絕：沒掛進去的東西不存在。
 
-本機 sandbox 的三個性質（`sandbox/`）：
+本機 sandbox 用的是 Docker Sandboxes（`sandbox/sbx.sh`）。四個性質：
 
-- 獨立 kernel 的 VM，只掛載專案的 worktree。
-- 對外連線限於 `sandbox/allowlist.txt`。這同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
-- VM 內只有 agent 的 GitHub token（見下方「身分與 token」），沒有 SSH key、雲端憑證。
+- 每個 agent 一個 microVM，有自己的 kernel。
+- **Clone 模式。** Repo 以唯讀方式掛進去，agent 在 VM 內自己的 clone 上工作。它做的任何事都改不到 Mac 上的檔案，交付成果的唯一途徑是 `git push`。這比看起來重要：若是一般的可讀寫掛載，agent 可以在 `.git/hooks` 寫入一個 git hook，等你下次在那個目錄使用 git 時，hook 就會在 Mac 上以你的身分執行。
+- 對外連線除了 `sandbox/allowlist.txt` 所列的主機之外一律拒絕，以主機名稱過濾。這同時限制了 prompt injection 之後的資料外送，以及惡意套件的回連。
+- VM 內沒有任何 GitHub 憑證。Host 上的 proxy 把佔位值換成你的 agent GitHub App 的一小時 token，token 由 host 上的 helper 在需要時產生。App 的 private key 不離開 host。SSH agent forwarding 會被關掉，因為它預設是開的，會讓 agent 能以你的身分 push。
 
-兩種實作：Docker Sandboxes（`sbx`，每個 agent 一個 microVM，以主機名稱過濾連線）與 Lima（`sandbox/vm.sh`，以位址過濾，較寬鬆）。Repo 內附的是 Lima 的腳本，因為它的設定格式穩定、可以完整寫出來；`sbx` 的隔離較嚴，確認其行為後建議改用。兩者都還沒在實機驗證，見第 9 節。
+Lima（`sandbox/vm.sh`）保留作為備援，以及 self-hosted runner 的所在。它在三方面較弱：workspace 是可讀寫掛載、連線以位址而非主機名稱過濾、App 的 key 必須放在 VM 內。兩者都還沒在實機上跑過，見第 9 節。
 
 雲端 session（Claude Code on the web、Codex cloud）是廠商管理的 VM，完全碰不到你的筆電，是隱私上最強的隔離，也是筆電闔上時唯一能繼續工作的地方。環境的網路設為受限，不放任何 secret。
 
@@ -77,7 +78,7 @@ Repo 共用的 `.claude/settings.json` 因此只放對兩種角色都成立的�
 | Agent | 每位開發者一個 GitHub App，給他自己的 agent 用 | 推 branch、留言、改 label | 開 PR、核准、merge、改 workflow、打 tag、寫 commit status |
 | Conductor | 一個代表 pipeline 的 GitHub App | 開 PR、啟用 auto-merge、派工、通知 | 核准 PR |
 
-為什麼每位開發者的 agent 各用一個 GitHub App：App 的權限就是它被授予的那些，與擁有者的角色無關，所以沒有 admin 的 bypass。它的 token 一小時過期。它不佔座位。而且每人一個，commit 與留言就看得出是誰的 agent 做的；所有人共用一個 App 則看不出來。Personal access token 做不到這些：從 admin 帳號發出的 token，即使是 fine-grained，仍繼承 admin 對 ruleset 的 bypass 資格。`agentctl app-token` 在 VM 內產生這個 token。
+為什麼每位開發者的 agent 各用一個 GitHub App：App 的權限就是它被授予的那些，與擁有者的角色無關，所以沒有 admin 的 bypass。它的 token 一小時過期。它不佔座位。而且每人一個，commit 與留言就看得出是誰的 agent 做的；所有人共用一個 App 則看不出來。Personal access token 做不到這些：從 admin 帳號發出的 token，即使是 fine-grained，仍繼承 admin 對 ruleset 的 bypass 資格。`agentctl app-token` 負責產生這個 token，而且是在 host 上執行：sandbox 的 proxy 呼叫它並把結果注入請求，所以 key 與 token 都不在 VM 內。
 
 為什麼 conductor 是另一個 GitHub App：GitHub 不允許作者核准自己的 PR。若雲端 agent 以你的身分開 spec PR，你就無法核准它。所以 agent 只推 branch，由 Conductor App 開 PR。另外，用預設的 `GITHUB_TOKEN` 開的 PR 與做的 merge 不會觸發其他 workflow，gate 根本不會跑。
 
@@ -261,9 +262,10 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 | Claude Code 雲端 session | Conductor 呼叫 scheduled task 的 API trigger | 否 |
 | Codex cloud | Conductor 在 PR 或 issue 上留 `@codex` | 否 |
 | Claude review | `agent-review` workflow job | 否 |
-| VM 內的 self-hosted runner | Conductor 啟動 `agent-job` workflow，runner 上線時領取 | 是 |
+| 本機的 Docker Sandbox（clone 模式） | 在你 Mac 上執行的 conductor 直接啟動 | 是 |
+| Lima VM 內的 self-hosted runner | Conductor 啟動 `agent-job` workflow，runner 上線時領取 | 是 |
 
-前三者是主力。第四個是補充產能與備援，Ollama 的任務只能走它。哪條雲端路徑實際可行，要由 spike 確認；不可行的在 `policy/roles.toml` 改成 `via = "workflow"`。
+前三者是主力。後兩個是補充產能與備援，需要 Mac 開著；Ollama 的任務只能走它們。Conductor 在 GitHub Actions 上時，派給本機 sandbox 的 stage 會等到 conductor 回到 Mac 上執行才開始。哪條雲端路徑實際可行，要由 spike 確認；不可行的在 `policy/roles.toml` 改成 `via = "sbx"`。
 
 ## 7. 你的日常
 
@@ -291,7 +293,7 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 
 **已在開發時驗證：**
 
-- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 87 個單元測試。
+- `agentctl` 的風險分級、雙語 spec 與文件檢查、traceability、red-green 判定、conductor 排程邏輯、額度估算、lease 判定，共 90 個單元測試。
 - Red-green 在一個真實的 git repo 上端對端執行，分成收集與判定兩步：空測試被擋下，改成真的測試後通過；沒有執行收集步驟時判定為失敗而非通過。
 - Conductor 的 GitHub 介接層對模擬的 `gh` 執行過：派工、留 marker、把 draft 轉為可審、單一動作失敗不影響其他動作；lease 有效時 Actions 端不動作、過期時接手；用量達門檻時改寫 `CI_RUNNER`。
 - Workflow 通過 actionlint，shell script 通過 shellcheck，指令攔截 hook 有測試。
@@ -303,7 +305,8 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 - 連結個人 admin 帳號的雲端 session 在 GitHub 上實際能做到什麼（red-team checklist 的 E 節）。
 - 對真實 API 產生 agent App 的 token（`agentctl app-token`）。
 - `anthropics/claude-code-action` 目前的輸入參數；Codex review bot 的帳號名稱與 review 格式。
-- `sandbox/` 下的 Lima 設定與 egress 規則；`sbx` 的指令與行為。
+- 實機上的 Docker Sandboxes：`sandbox/sbx.sh` 用到的 `sbx` 指令、clone 模式、proxy 是否會把 App token 注入走 HTTPS 的 `git push`（文件沒有明講）、sandbox 內 home 目錄的路徑、各 harness 的無人值守執行方式。
+- `sandbox/` 下的 Lima 設定與 egress 規則。
 - `.claude/settings.json` 的 sandbox 與 permission 語法是否符合目前版本。
 - 1-core runner 的實際 label；`workflow_run` 觸發 conductor 與跨 workflow 下載 artifact 所需的權限；Conductor App 寫入 repo variable 的權限。
 - Draft PR 上被跳過的 required check 在轉為可審之後的行為。
@@ -314,9 +317,11 @@ T 是測試套件跑一次的分鐘數；「等值」是把 1-core runner 的分
 ## 10. 已知限制
 
 - 兩位開發者本身被信任。設計防的是 agent 失控與 prompt injection，不防內部人員。
-- VM 內的 worktree 是可寫的，agent 可以毀掉它。已 push 的內容受 GitHub 保護，未 push 的工作可能遺失。
+- Clone 模式下，agent 的工作在 push 之前只存在於 VM 內。沒有 push 就結束的 stage，除了 log 之外什麼都不會留下。
+- 在 Lima 備援與 sbx 的直接掛載模式下，workspace 是可讀寫的。Agent 因此可以毀掉工作目錄，也可以埋一個之後會在 Mac 上執行的 git hook。這是預設採用 clone 模式的原因。
+- Docker Sandboxes 的版本號是 0.x，指令可能變動。
 - VM 內的訂閱登入狀態理論上可被惡意的 repo 內容竊取。Egress allowlist 降低但不消除這個風險。
-- Lima 的 egress 規則以位址過濾，與允許的主機共用位址的其他主機也連得到。
+- 在 Lima 備援中，egress 規則以位址過濾，與允許的主機共用位址的其他主機也連得到。
 - 雲端 session 以你連結的個人帳號操作。在跑過 red-team checklist 的 E 節之前，應假設雲端 agent 在 GitHub 上能做到該帳號能做的一切，只受沒有 bypass 的 ruleset 限制。Release tag 的 ruleset 允許 admin bypass，所以它是必測項目之一。
 - 你貼進 PO chat 或 issue 的內容會進入廠商的 context，不在隔離範圍內。
 - 雙語 story 的語意一致性沒有硬性保證。你核准的中文與 agent 實作的英文若有出入，只有 review agent 與你自己能發現。

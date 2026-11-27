@@ -50,7 +50,7 @@ Agents can only push branches. Every other step is guarded by GitHub rulesets an
 | `policy/` | Risk rules, conductor limits, role assignment, the contract with the technology stack |
 | `prompts/` | Instructions for each stage, vendor-neutral |
 | `.github/` | Workflows, rulesets, CODEOWNERS |
-| `sandbox/` | Local VM, egress allowlist, the runner inside the VM |
+| `sandbox/` | Docker Sandboxes setup (clone mode), egress allowlist, the Lima fallback and its runner |
 | `.claude/`, `codex/` | Settings for each harness |
 | `docs/specs/`, `docs/sprints/`, `docs/product/` | The things you approve |
 

@@ -6,7 +6,7 @@ Extra capacity and a fallback. While the Mac is on, the runner in the VM picks u
 the `agent-job` runs the conductor queues on GitHub. Nobody has to start them.
 Ollama stages can only run here.
 
-Cloud sessions remain the main path, because they keep working with the laptop closed.
+Cloud sessions remain the main path, because they keep working with the laptop closed. On the Mac, the main path is a Docker Sandbox started by the local conductor (`sandbox/sbx.sh`); this runner lives in the Lima fallback VM and is the weaker of the two.
 
 The runner has a second use. When the month's Actions allowance is nearly spent,
 `agentctl budget` moves `ci` and `security`, the two heavy jobs that execute pull

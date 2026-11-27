@@ -45,6 +45,9 @@
 | 23 | PR 的程式碼在 self-hosted runner 上留下東西，影響之後的 job | 負責判定的 job 永遠在 GitHub-hosted runner 上；overflow 的只有 `ci` 與 `security` | Runner 在 VM 內 |
 | 24 | 維護用的 session 被誘導去削弱 guardrail | guardrail 路徑的變更一律需要人類核准才能合併 | AGENTS.md 第 3 條：只有人類在 session 中直接提出才算維護要求 |
 | 25 | Actions 額度被耗盡，gate 無法執行 | 額度用完時 PR 無法合併，不會在沒有 gate 的情況下合併 | 用量估算、overflow 到 self-hosted、每日 brief |
+| 26 | Agent 在掛載的 repo 裡埋 git hook 或改 `.git/config`，等你下次在那裡使用 git 時在 Mac 上執行 | Clone 模式：repo 以唯讀掛載，agent 在自己的 clone 上工作 | Workspace 可寫時 `agentctl doctor --inside` 會警告 |
+| 27 | Agent 利用被轉發的 SSH agent 以你的身分 push，繞過它自己的身分 | `sandbox/sbx.sh setup` 關掉 SSH agent forwarding；對外的 SSH 不在 allowlist 內 | 連得到帶有 key 的 SSH agent 時 `agentctl doctor --inside` 會判定失敗 |
+| 28 | Agent 的 GitHub 憑證從 sandbox 內被竊取 | 使用 sbx 時 key 與 token 都不在 VM 內；host 上的 proxy 注入一小時的 token | Lima 備援中 key 在 VM 內；可在 App 的設定頁撤銷 |
 
 ## 參考事故
 

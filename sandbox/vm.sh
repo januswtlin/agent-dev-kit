@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Manage the agent sandbox VM (Lima). Run on the Mac, from the project directory.
+# Manage the FALLBACK agent sandbox VM (Lima). Run on the Mac, from the project directory.
+# The primary local sandbox is Docker Sandboxes in clone mode: see sandbox/sbx.sh.
+# Lima is weaker (read-write mount, address-based egress filter, App key inside the
+# VM); use it when sbx is unavailable, or for the self-hosted runner.
 #
 #   sandbox/vm.sh up        create or start the VM, mount this worktree only, apply the egress allowlist
 #   sandbox/vm.sh shell     open a shell inside, in /workspace

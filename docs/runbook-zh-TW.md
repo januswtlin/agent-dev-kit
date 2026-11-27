@@ -108,7 +108,51 @@ gh api repos/OWNER/REPO/rulesets --jq '.[].name'
 bin/agentctl doctor
 ```
 
-修掉所有 FAIL。然後建立 VM：
+修掉所有 FAIL。本機 sandbox 用的是 clone 模式的 Docker Sandboxes。依其文件安裝 `sbx`（docs.docker.com/ai/sandboxes），然後登入：
+
+```bash
+sbx login
+```
+
+把你的 agent App 的 ID 與 private key（第 2.1 節）放在 Mac 上。它們留在 host，sandbox 內的任何東西都讀不到。把 `APP_ID` 換成你的 App ID，檔名換成你下載的 key 檔：
+
+```bash
+mkdir -p ~/.config/agent-app && echo APP_ID > ~/.config/agent-app/app-id
+```
+
+```bash
+mv ~/Downloads/YOUR_APP.private-key.pem ~/.config/agent-app/key.pem && chmod 600 ~/.config/agent-app/key.pem
+```
+
+接著：
+
+```bash
+sandbox/sbx.sh setup
+```
+
+這會關掉 sbx 的 SSH agent forwarding（這個設定對你所有的 sandbox 生效）、放行 `sandbox/allowlist.txt` 所列的主機，並把 token helper 安裝在 repo 之外，內容取自 default branch 上的工具。若要讓 sandbox 能連到 Mac 上的 Ollama，改用 `AGENT_OLLAMA=1 sandbox/sbx.sh setup` 執行。
+
+依 sbx 文件對各 harness 的說明登入。撰寫本文時，Codex 是在 host 上執行 `sbx secret set openai --oauth`，Claude Code 是在 sandbox 內執行 `/login`（**待驗證**）。
+
+啟動一個互動式的 agent，然後在第二個 terminal 檢查邊界：
+
+```bash
+sandbox/sbx.sh up claude
+```
+
+```bash
+sandbox/sbx.sh check
+```
+
+Agent 在自己的 clone 上工作，以 push 交付成果。想在它 push 之前看它的工作，可以從 sbx 加到你 repo 的 remote 取得（`REPO` 是目錄名稱）：
+
+```bash
+git fetch sandbox-agent-REPO-claude
+```
+
+**待驗證**（實機）：這一節的全部內容。特別要確認 sandbox 內的 `git push` 會成功，而且歸屬於你的 agent App，並把結果記在 red-team checklist。
+
+備援：Lima。在你無法使用 sbx 時，或是要跑 self-hosted runner（`sandbox/runner/README-zh-TW.md`）時使用。它較弱：workspace 是可讀寫掛載、連線以位址過濾、App 的 key 必須放在 VM 內。
 
 ```bash
 brew install lima
@@ -122,27 +166,17 @@ sandbox/vm.sh up
 sandbox/vm.sh check
 ```
 
-進入 VM，登入你的 harness，並設定 agent 的 GitHub 身分：
-
 ```bash
 sandbox/vm.sh shell
 ```
 
-以下在 VM 內：
-
-```bash
-claude
-```
-
-```bash
-codex login
-```
+以下在 VM 內執行。先登入你的 harness（`claude`、`codex login`），再把 agent App 的 key 交給 VM：
 
 ```bash
 mkdir -p ~/.config/agent-app && cat > ~/.config/agent-app/key.pem && chmod 600 ~/.config/agent-app/key.pem
 ```
 
-貼上你的 agent App 的 private key（第 2.1 節）後按 Ctrl-D。接著，把 `APP_ID` 換成你的 App ID、`yourname-agent` 換成你的 App 名稱：
+貼上 private key 後按 Ctrl-D。接著，把 `APP_ID` 換成你的 App ID、`yourname-agent` 換成你的 App 名稱：
 
 ```bash
 echo 'export AGENT_APP_ID=APP_ID AGENT_APP_KEY=$HOME/.config/agent-app/key.pem PATH=/workspace/sandbox/bin:$PATH' >> ~/.profile && . ~/.profile
@@ -152,21 +186,11 @@ echo 'export AGENT_APP_ID=APP_ID AGENT_APP_KEY=$HOME/.config/agent-app/key.pem P
 git config --global credential.https://github.com.helper '!/workspace/bin/agentctl app-token --git-credential' && git config --global user.name "yourname-agent[bot]" && git config --global user.email "yourname-agent[bot]@users.noreply.github.com"
 ```
 
-之後 VM 內的 git 與 `gh` 都以你的 agent App 的身分操作。`sandbox/bin/gh` 包了一層 `gh`，每次呼叫都用新的一小時 token。Key 留在 VM 內：VM 若被入侵，外洩的是這個 App 對這一個 repo 的存取權（推 branch、留言、改 label），在 App 的設定頁刪除該 key 即可撤銷。
-
-把 `codex/config.example.toml` 的 `vm` profile 複製到 VM 內的 `~/.codex/config.toml`。
-
-把 story agent 專用的 deny rules 安裝為 VM 內的使用者層設定。這組規則禁止編輯 guardrail 路徑與已核准的 spec，只該對 story agent 生效，所以不放在 repo 共用的設定裡：
-
 ```bash
 mkdir -p ~/.claude && cp /workspace/sandbox/story-agent.claude-settings.json ~/.claude/settings.json
 ```
 
-雲端環境也要套用同一組規則（**待驗證**：兩家雲端服務設定使用者層規則的方式）。
-
-若改用 Docker Sandboxes（隔離較嚴，建議）：**待驗證** 其指令。研究時查到的形式是 `sbx run claude`、`sbx run codex`，以及 `sbx policy allow network <domain>`。確認後把 `sandbox/allowlist.txt` 的主機逐一加入，並執行同一份 checklist。
-
-Self-hosted runner 的安裝見 `sandbox/runner/README.md`。這是選配，建議在雲端路徑確認之後再決定要不要裝。
+最後一個指令安裝的是 story agent 專用的 deny rules。另外把 `codex/config.example.toml` 的 `vm` profile 複製到 `~/.codex/config.toml`。雲端環境也要套用同一組 story agent 規則（**待驗證**：兩家雲端服務設定使用者層規則的方式）。
 
 ## 6. 雲端 agent
 
@@ -283,9 +307,9 @@ bin/agentctl conductor status
 
 ## 12. Ollama（之後再做）
 
-Ollama 裝在 Mac 上（需要 GPU），VM 透過 host gateway 的 11434 port 存取，`sandbox/egress.sh` 已放行這個 port。
+Ollama 裝在 Mac 上（需要 GPU）。以 `AGENT_OLLAMA=1 sandbox/sbx.sh setup` 放行該 port 之後，sandbox 可經 `host.docker.internal:11434` 存取它。在 Lima 備援中，`sandbox/egress.sh` 已經透過 host gateway 放行。
 
 - 24GB 記憶體的 M2：選 14 到 15GB 級的模型（例如 devstral 24b、gpt-oss 20b）。19GB 級的模型加上大 context 會很吃緊。模型名稱與大小請以當下的 Ollama 模型庫為準。
 - 一定要調高 context window。預設值很小，agent 會靜默遺失開頭的指示。
 - 定位在 T0 類的工作：文件、lint 修正、測試骨架。產出一樣要過所有 gate。
-- 在 `policy/roles.toml` 把想交給它的 stage 加上 `"ollama"`。它只能經 self-hosted runner 執行。
+- 在 `policy/roles.toml` 把想交給它的 stage 加上 `"ollama"`。它在本機 sandbox 內執行，所以這些 stage 只有在 conductor 跑在你的 Mac 上（`agentctl conductor here`）時才會開始。

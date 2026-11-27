@@ -50,7 +50,7 @@ Agent 只能推 branch。其餘的每一步都由 GitHub 的 ruleset 與檢查�
 | `policy/` | 風險規則、conductor 上限、角色分配、與技術棧的契約 |
 | `prompts/` | 各 stage 的指令，與廠商無關 |
 | `.github/` | Workflows、rulesets、CODEOWNERS |
-| `sandbox/` | 本機 VM、egress allowlist、VM 內的 runner |
+| `sandbox/` | Docker Sandboxes 的設定（clone 模式）、egress allowlist、Lima 備援與其中的 runner |
 | `.claude/`、`codex/` | 各 harness 的設定 |
 | `docs/specs/`、`docs/sprints/`、`docs/product/` | 你核准的東西 |
 

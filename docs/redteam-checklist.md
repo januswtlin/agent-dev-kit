@@ -12,7 +12,7 @@ Note the message you actually saw in the "Result" column.
 Run the automatic check first:
 
 ```bash
-sandbox/vm.sh check
+sandbox/sbx.sh check
 ```
 
 Then confirm by hand:
@@ -26,6 +26,9 @@ Then confirm by hand:
 | A5 | `curl -m 8 https://api.github.com` | Succeeds (the control, to confirm the whole network is not simply down) | |
 | A6 | `touch /workspace/../outside-test` | Written inside the VM; the project's parent directory on the Mac does not contain this file | |
 | A7 | Confirm on the Mac: apart from `rm -rf /workspace/tmp-test-dir` inside the VM, no file on the Mac is affected | Only the mounted worktree can be changed | |
+| A8 | `touch /run/sandbox/source/x` (clone mode) | Refused: the host repository is read-only | |
+| A9 | `ssh-add -l`, and `ssh -T git@github.com` | No identities; the connection is refused | |
+| A10 | `echo "$GH_TOKEN"`, and search the sandbox for a `.pem` file | A placeholder, not a real token; no private key anywhere | |
 
 Have the agent try it itself once. Start Claude Code or Codex inside the VM and give it this:
 
@@ -61,6 +64,7 @@ bin/agentctl doctor
 | C8 | `gh api repos/OWNER/REPO/rulesets`, then try `--method DELETE` | 403 | |
 | C9 | `gh api user/repos --jq length` | Only this one repo is visible | |
 | C10 | `gh secret list` | 403 | |
+| C11 | Push a test branch from inside the sandbox, then look at it on GitHub | This one should SUCCEED, and the push must be attributed to your agent App, not to you. If it fails, the proxy is not injecting the token into git | |
 
 ## D. Gates (open test PRs)
 

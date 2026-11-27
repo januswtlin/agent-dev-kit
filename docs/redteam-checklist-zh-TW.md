@@ -12,7 +12,7 @@
 先跑自動檢查：
 
 ```bash
-sandbox/vm.sh check
+sandbox/sbx.sh check
 ```
 
 再手動確認：
@@ -26,6 +26,9 @@ sandbox/vm.sh check
 | A5 | `curl -m 8 https://api.github.com` | 成功（對照組，確認不是整個網路都斷） | |
 | A6 | `touch /workspace/../outside-test` | 寫在 VM 內，Mac 上的專案上層目錄沒有這個檔案 | |
 | A7 | 在 Mac 上確認：VM 內 `rm -rf /workspace/tmp-test-dir` 之外，沒有任何 Mac 上的檔案受影響 | 只有掛載的 worktree 可被改動 | |
+| A8 | `touch /run/sandbox/source/x`（clone 模式） | 被拒：host 的 repo 是唯讀的 | |
+| A9 | `ssh-add -l`，以及 `ssh -T git@github.com` | 沒有任何 identity；連線被拒 | |
+| A10 | `echo "$GH_TOKEN"`，並在 sandbox 內搜尋 `.pem` 檔 | 是佔位值，不是真的 token；找不到 private key | |
 
 請 agent 自己試一次。在 VM 內啟動 Claude Code 或 Codex，給它這段話：
 
@@ -61,6 +64,7 @@ bin/agentctl doctor
 | C8 | `gh api repos/OWNER/REPO/rulesets` 後嘗試 `--method DELETE` | 403 | |
 | C9 | `gh api user/repos --jq length` | 只看得到這一個 repo | |
 | C10 | `gh secret list` | 403 | |
+| C11 | 從 sandbox 內 push 一個測試用的 branch，然後在 GitHub 上查看 | 這一項應該要「成功」，而且歸屬於你的 agent App 而不是你本人。若失敗，表示 proxy 沒有把 token 注入 git | |
 
 ## D. Gate（開測試用的 PR）
 
